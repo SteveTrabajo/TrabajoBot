@@ -1,14 +1,14 @@
 """
 birthdays.py
 ============
-A Cog for storing and retrieving user birthdays in CockroachDB using psycopg2.
+A Cog for storing and retrieving user birthdays in CockroachDB using the connection pool.
 """
 
 import logging
 import datetime
 from discord.ext import commands
 from discord import app_commands, Interaction
-from db import Database
+from db import get_database
 
 logger = logging.getLogger("TrabajoBot")
 
@@ -23,20 +23,17 @@ class BirthdaysCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.db = Database()
+        self.db = get_database()
 
         # Ensure the table exists
         creation_query = """
         CREATE TABLE IF NOT EXISTS birthdays (
             user_id BIGINT PRIMARY KEY,
             birthday_date DATE NOT NULL
-        );
+        )
         """
         self.db.ensure_table_exists("birthdays", creation_query)
         logger.debug("BirthdaysCog initialized with database table check.")
-
-    def __del__(self):
-        self.db.conn.close()
 
     @app_commands.command(name="setbirthday", description="Set your birthday (YYYY-MM-DD).")
     @app_commands.describe(date="The date of your birthday (YYYY-MM-DD)")
@@ -62,7 +59,7 @@ class BirthdaysCog(commands.Cog):
               SET birthday_date = EXCLUDED.birthday_date
         """
         try:
-            self.db.execute(query, (interaction.user.id, bday), commit=True)
+            cursor = self.db.execute(query, (interaction.user.id, bday), commit=True)
             logger.debug(f"Birthday set for user {interaction.user.id} to {bday}")
             await interaction.followup.send(f"Birthday set to {bday} for {interaction.user.mention}")
         except Exception as e:
@@ -79,8 +76,8 @@ class BirthdaysCog(commands.Cog):
             WHERE user_id = %s
         """
         try:
-            self.db.execute(query, (interaction.user.id,))
-            row = self.db.fetchone()
+            cursor = self.db.execute(query, (interaction.user.id,))
+            row = self.db.fetchone(cursor)
             if row:
                 logger.debug(f"User {interaction.user.id} birthday: {row['birthday_date']}")
                 await interaction.followup.send(f"Your birthday is set to **{row['birthday_date']}**.")
@@ -101,8 +98,8 @@ class BirthdaysCog(commands.Cog):
             ORDER BY birthday_date
         """
         try:
-            self.db.execute(query, ())
-            rows = self.db.fetchall()
+            cursor = self.db.execute(query, ())
+            rows = self.db.fetchall(cursor)
             if not rows:
                 logger.debug("No birthdays found.")
                 return await interaction.followup.send("No birthdays found.")

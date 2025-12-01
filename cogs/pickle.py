@@ -14,8 +14,8 @@ import datetime
 import io
 import os
 from typing import Optional, Tuple, List, Dict
-from db import Database
 import logging
+from util.db_utils import db_retry
 
 logger = logging.getLogger("TrabajoBot")
 
@@ -36,144 +36,81 @@ class PickleConfig:
 class PickleData:
     """Handles all database operations for the Pickle module"""
     def __init__(self):
-        self.db = Database()
+        from db import get_database
+        self.db = get_database()
         self._ensure_tables()
 
     def _ensure_tables(self):
         """Ensures all required tables exist in the database"""
-        creation_query = """
-        CREATE TABLE IF NOT EXISTS pickle_sizes (
-            user_id BIGINT PRIMARY KEY,
-            current_size INTEGER,
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+        tables = [
+            ("pickle_sizes", """
+                CREATE TABLE IF NOT EXISTS pickle_sizes (
+                    user_id BIGINT PRIMARY KEY,
+                    current_size INTEGER,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """),
+            ("pickle_history", """
+                CREATE TABLE IF NOT EXISTS pickle_history (
+                    user_id BIGINT,
+                    size INTEGER,
+                    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, recorded_at)
+                )
+            """)
+        ]
         
-        CREATE TABLE IF NOT EXISTS pickle_history (
-            user_id BIGINT,
-            size INTEGER,
-            recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (user_id, recorded_at)
-        );
-        """
-        self.db.execute(creation_query, commit=True)
+        for table_name, creation_query in tables:
+            self.db.ensure_table_exists(table_name, creation_query)
 
+    @db_retry()
     async def get_size(self, user_id: int) -> Optional[int]:
         """Get current pickle size for a user"""
-        try:
-            self.db.execute("SELECT current_size FROM pickle_sizes WHERE user_id = %s", (user_id,))
-            result = self.db.fetchone()
-            return result['current_size'] if result else None
-        except Exception as e:
-            logger.error(f"Database error in get_size: {e}")
-            # Try one reconnect
-            self.db = Database()
-            try:
-                self.db.execute("SELECT current_size FROM pickle_sizes WHERE user_id = %s", (user_id,))
-                result = self.db.fetchone()
-                return result['current_size'] if result else None
-            except Exception as e:
-                logger.error(f"Retry failed in get_size: {e}")
-                raise
+        cursor = self.db.execute("SELECT current_size FROM pickle_sizes WHERE user_id = %s", (user_id,))
+        result = self.db.fetchone(cursor)
+        return result['current_size'] if result else None
 
+    @db_retry()
     async def set_size(self, user_id: int, size: int):
         """Set pickle size for a user and record in history"""
-        try:
-            # Start transaction
-            self.db.execute("BEGIN")
-            
-            # Update current size
-            self.db.execute("""
+        queries = [
+            ("""
                 INSERT INTO pickle_sizes (user_id, current_size)
                 VALUES (%s, %s)
                 ON CONFLICT (user_id) DO UPDATE
                 SET current_size = %s, last_updated = CURRENT_TIMESTAMP
-            """, (user_id, size, size))
-
-            # Add to history
-            self.db.execute("""
+            """, (user_id, size, size)),
+            ("""
                 INSERT INTO pickle_history (user_id, size)
                 VALUES (%s, %s)
             """, (user_id, size))
-            
-            # Commit transaction
-            self.db.execute("COMMIT")
-        except Exception as e:
-            logger.error(f"Database error in set_size: {e}")
-            try:
-                self.db.execute("ROLLBACK")
-            except:
-                pass
-            
-            # Try one reconnect
-            self.db = Database()
-            try:
-                self.db.execute("BEGIN")
-                self.db.execute("""
-                    INSERT INTO pickle_sizes (user_id, current_size)
-                    VALUES (%s, %s)
-                    ON CONFLICT (user_id) DO UPDATE
-                    SET current_size = %s, last_updated = CURRENT_TIMESTAMP
-                """, (user_id, size, size))
-                self.db.execute("""
-                    INSERT INTO pickle_history (user_id, size)
-                    VALUES (%s, %s)
-                """, (user_id, size))
-                self.db.execute("COMMIT")
-            except Exception as e:
-                try:
-                    self.db.execute("ROLLBACK")
-                except:
-                    pass
-                logger.error(f"Retry failed in set_size: {e}")
-                raise
+        ]
+        
+        if not self.db.execute_transaction(queries):
+            raise Exception("Failed to set pickle size")
 
+    @db_retry()
     async def get_leaderboard(self) -> List[Dict]:
         """Get the current pickle size leaderboard"""
-        max_retries = 3
-        retry_count = 0
-        
-        while retry_count < max_retries:
-            try:
-                # Ensure clean transaction state
-                try:
-                    self.db.execute("ROLLBACK")
-                except Exception:
-                    pass
-                    
-                self.db.execute("""
-                    SELECT user_id, current_size 
-                    FROM pickle_sizes 
-                    ORDER BY current_size DESC
-                """)
-                result = self.db.fetchall()
-                return result
-            except Exception as e:
-                if "TransactionRetryWithProtoRefreshError" in str(e) and retry_count < max_retries - 1:
-                    retry_count += 1
-                    continue
-                raise
+        cursor = self.db.execute("""
+            SELECT user_id, current_size 
+            FROM pickle_sizes 
+            ORDER BY current_size DESC
+        """)
+        return self.db.fetchall(cursor)
 
+    @db_retry()
     async def get_history(self, user_id: int, months: int = 12) -> List[Tuple[datetime.date, int]]:
         """Get pickle size history for a user"""
-        max_retries = 3
-        retry_count = 0
-        
-        while retry_count < max_retries:
-            try:
-                self.db.execute("""
-                    SELECT recorded_at::date as date, size
-                    FROM pickle_history
-                    WHERE user_id = %s
-                    AND recorded_at > NOW() - INTERVAL '%s MONTHS'
-                    ORDER BY recorded_at ASC
-                """, (user_id, months))
-                result = [(row['date'], row['size']) for row in self.db.fetchall()]
-                return result
-            except Exception as e:
-                if "TransactionRetryWithProtoRefreshError" in str(e) and retry_count < max_retries - 1:
-                    retry_count += 1
-                    continue
-                raise
+        cursor = self.db.execute("""
+            SELECT recorded_at::date as date, size
+            FROM pickle_history
+            WHERE user_id = %s
+            AND recorded_at > NOW() - INTERVAL '%s MONTHS'
+            ORDER BY recorded_at ASC
+        """, (user_id, months))
+        return [(row['date'], row['size']) for row in self.db.fetchall(cursor)]
+
 
 class PickleGraphs:
     """Handles all graph generation for the Pickle module"""
@@ -453,60 +390,45 @@ class Pickle(commands.Cog):
             if now.day == 1 and now.hour == 0:
                 logger.info("Performing monthly pickle size reset...")
                 try:
-                    # Ensure clean transaction state
-                    try:
-                        self.data.db.execute("ROLLBACK")
-                    except Exception:
-                        pass
-
-                    # Start transaction
-                    self.data.db.execute("BEGIN")
+                    # Use the transaction method for multiple operations
+                    queries = [
+                        ("""
+                            INSERT INTO pickle_history (user_id, size)
+                            SELECT user_id, current_size
+                            FROM pickle_sizes
+                            WHERE NOT EXISTS (
+                                SELECT 1 FROM pickle_history
+                                WHERE pickle_history.user_id = pickle_sizes.user_id
+                                AND DATE_TRUNC('month', recorded_at) = DATE_TRUNC('month', CURRENT_TIMESTAMP)
+                            )
+                        """, ()),
+                        ("TRUNCATE TABLE pickle_sizes", ())
+                    ]
                     
-                    # Archive current month's data
-                    self.data.db.execute("""
-                        INSERT INTO pickle_history (user_id, size)
-                        SELECT user_id, current_size
-                        FROM pickle_sizes
-                        WHERE NOT EXISTS (
-                            SELECT 1 FROM pickle_history
-                            WHERE pickle_history.user_id = pickle_sizes.user_id
-                            AND DATE_TRUNC('month', recorded_at) = DATE_TRUNC('month', CURRENT_TIMESTAMP)
-                        )
-                    """)
-                    
-                    # Reset current sizes
-                    self.data.db.execute("TRUNCATE TABLE pickle_sizes")
-                    
-                    # Commit transaction
-                    self.data.db.execute("COMMIT")
-                    
-                    logger.info("Monthly pickle reset completed successfully")
-                    
-                    # Notify in all guilds where the bot is present
-                    for guild in self.bot.guilds:
-                        try:
-                            # Try to find a general or bot channel to send the message
-                            channel = next((ch for ch in guild.text_channels if ch.name in ['general', 'bot', 'bot-commands', 'announcements']), None)
-                            
-                            if channel:
-                                await channel.send(
-                                    embed=discord.Embed(
-                                        title=f"{PickleConfig.PICKLE_EMOJI} Monthly Pickle Reset {PickleConfig.PICKLE_EMOJI}",
-                                        description="All pickle sizes have been reset for the new month! Use `/pickle` to get your new size!",
-                                        color=PickleConfig.EMBED_COLOR
+                    if self.data.db.execute_transaction(queries):
+                        logger.info("Monthly pickle reset completed successfully")
+                        
+                        # Notify in all guilds where the bot is present
+                        for guild in self.bot.guilds:
+                            try:
+                                # Try to find a general or bot channel to send the message
+                                channel = next((ch for ch in guild.text_channels if ch.name in ['general', '🍁general' , 'bot', 'bot-commands', 'announcements', 'special-operations']), None)
+                                
+                                if channel:
+                                    await channel.send(
+                                        embed=discord.Embed(
+                                            title=f"{PickleConfig.PICKLE_EMOJI} Monthly Pickle Reset {PickleConfig.PICKLE_EMOJI}",
+                                            description="All pickle sizes have been reset for the new month! Use `/pickle` to get your new size!",
+                                            color=PickleConfig.EMBED_COLOR
+                                        )
                                     )
-                                )
-                        except Exception as e:
-                            logger.error(f"Failed to send reset notification in guild {guild.name}: {e}")
-                            
+                            except Exception as e:
+                                logger.error(f"Failed to send reset notification in guild {guild.name}: {e}")
+                    else:
+                        logger.error("Monthly pickle reset transaction failed")
+                        
                 except Exception as e:
-                    # Ensure we rollback on any error
-                    try:
-                        self.data.db.execute("ROLLBACK")
-                    except Exception:
-                        pass
                     logger.error(f"Failed to perform monthly pickle reset: {e}")
-                    raise
                     
         except Exception as e:
             logger.error(f"Error in monthly reset task: {e}")
