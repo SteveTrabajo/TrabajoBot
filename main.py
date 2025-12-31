@@ -26,12 +26,14 @@ class MyBot(commands.Bot):
 
     async def setup_hook(self):
             
+        """ DEPRECATED WAVELINK POOL SETUP
         nodes = [wavelink.Node(uri="https://lava-v4.ajieblogs.eu.org:443", password="https://dsc.gg/ajidevserver"),
                  wavelink.Node(uri="https://lavalinkv4.serenetia.com:443", password="https://dsc.gg/ajidevserver"),
                  wavelink.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass")]
         # cache_capacity is EXPERIMENTAL. Turn it off by passing None
         await wavelink.Pool.connect(nodes=nodes, client=self, cache_capacity=None)
-        
+        """
+            
         logger.info("Starting bot setup...")
 
         # ------------------------------------------------------
