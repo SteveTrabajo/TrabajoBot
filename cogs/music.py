@@ -4,15 +4,28 @@ import asyncio
 import discord
 from discord.ext import commands
 from discord import app_commands, Interaction
+from functools import wraps
 
 import wavelink
 
 logger = logging.getLogger("TrabajoBot")
 
+def maintenance_check(func):
+    """Decorator that checks if maintenance mode is on before executing a command."""
+    @wraps(func)
+    async def wrapper(self, interaction: Interaction, *args, **kwargs):
+        if self.MAINTENANCE_MODE:
+            await interaction.response.send_message("Music commands are under maintenance right now.", ephemeral=True)
+            return
+        return await func(self, interaction, *args, **kwargs)
+    return wrapper
+
 class MusicCog(commands.Cog):
 
     cog_name = "Music"
     cog_description = "Play music with the bot"
+    MAINTENANCE_MODE = True  # Set to False to enable music commands
+    
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
@@ -86,6 +99,7 @@ class MusicCog(commands.Cog):
     # ---------------------------------------------------------
     # /play from snippet
     # ---------------------------------------------------------
+    @maintenance_check
     @app_commands.command(name="play", description="Play a song with the given query (autoplay enabled).")
     @app_commands.describe(query="Search terms or link.")
     async def slash_play(self, interaction: Interaction, query: str):
@@ -148,6 +162,7 @@ class MusicCog(commands.Cog):
     # ---------------------------------------------------------
     # /skip
     # ---------------------------------------------------------
+    @maintenance_check
     @app_commands.command(name="skip", description="Skip the current song.")
     async def slash_skip(self, interaction: Interaction):
         """Skip song"""
@@ -162,6 +177,7 @@ class MusicCog(commands.Cog):
     # ---------------------------------------------------------
     # /nightcore
     # ---------------------------------------------------------
+    @maintenance_check
     @app_commands.command(name="nightcore", description="Set the filter to a nightcore style.")
     async def slash_nightcore(self, interaction: Interaction):
         """Snippets 'nightcore' command sets pitch=1.2, speed=1.2, rate=1"""
@@ -182,6 +198,7 @@ class MusicCog(commands.Cog):
     # ---------------------------------------------------------
     # /resetfilters
     # ---------------------------------------------------------
+    @maintenance_check
     @app_commands.command(name="resetfilters", description="Resets all player filters")
     async def slash_resetfilters(self, interaction: Interaction):
         """Resets filters"""
@@ -196,6 +213,7 @@ class MusicCog(commands.Cog):
     # ---------------------------------------------------------
     # /toggle = snippet's pause/resume
     # ---------------------------------------------------------
+    @maintenance_check
     @app_commands.command(name="toggle", description="Pause or Resume the player depending on its current state.")
     async def slash_toggle(self, interaction: Interaction):
         player: wavelink.Player = cast(wavelink.Player, interaction.guild.voice_client)
@@ -209,6 +227,7 @@ class MusicCog(commands.Cog):
     # ---------------------------------------------------------
     # /volume
     # ---------------------------------------------------------
+    @maintenance_check
     @app_commands.command(name="volume", description="Change the volume of the player.")
     @app_commands.describe(value="Volume to set.")
     async def slash_volume(self, interaction: Interaction, value: int):
@@ -226,9 +245,10 @@ class MusicCog(commands.Cog):
     # ---------------------------------------------------------
     # /disconnect (alias=dc)
     # ---------------------------------------------------------
+    @maintenance_check
     @app_commands.command(name="disconnect", description="Disconnect the Player.")
     async def slash_disconnect(self, interaction: Interaction):
-        """Matches snippet's 'disconnect' logic: 'await player.disconnect()'"""
+        """Disconnect the player from voice channel."""
         player: wavelink.Player = cast(wavelink.Player, interaction.guild.voice_client)
         if not player:
             return await interaction.response.send_message("I'm not in a voice channel.", ephemeral=True)
