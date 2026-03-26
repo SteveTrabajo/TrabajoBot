@@ -7,12 +7,13 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger("TrabajoBot")
 
-ADMIN_USER_ID = int(os.getenv("STEVEID"))  # Your Discord ID
-TEST_GUILD_ID = int(os.getenv("TEST_GUILD_ID"))  # Your Test Guild ID
+ADMIN_USER_ID = int(os.getenv("STEVEID", 0))  # Your Discord ID
+if not ADMIN_USER_ID:
+    logger.warning("STEVEID environment variable is not set. Admin commands will be disabled.")
 
 def is_owner(ctx):
     """Check if the command user is the bot owner (you)."""
-    return ctx.author.id == ADMIN_USER_ID
+    return bool(ADMIN_USER_ID) and ctx.author.id == ADMIN_USER_ID
 
 class AdminCog(commands.Cog):
     """
@@ -96,7 +97,7 @@ class AdminCog(commands.Cog):
         """Send a message to a specific server and channel"""
         
         # Owner-only check
-        if interaction.user.id != ADMIN_USER_ID:
+        if not ADMIN_USER_ID or interaction.user.id != ADMIN_USER_ID:
             logger.warning(f"Unauthorized send_message attempt by {interaction.user} (ID: {interaction.user.id})")
             await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
             return
@@ -177,7 +178,7 @@ class AdminCog(commands.Cog):
                 logger.info(f"Reloaded {cog}")
             except Exception as e:
                 if "has not been loaded" in str(e):
-                    await self.bot.load_extension(f"cogs.{cog}")
+                    await self.bot.load_extension(cog)
                     logger.info(f"Cog: {cog} not loaded, loading...")
                 else:
                     errors.append(f"❌ `{cog}`: {e}")

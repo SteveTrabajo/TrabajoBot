@@ -7,7 +7,7 @@ A Cog with simple slash commands for entertainment or fun interactions
 import os
 import logging
 import random
-import requests
+import aiohttp
 import discord  # Ensure discord is imported
 from discord.ext import commands
 from discord import app_commands, Interaction
@@ -28,9 +28,22 @@ class FunCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._session: aiohttp.ClientSession | None = None
         logger.debug("FunCog initialized.")
 
-    def get_random_gif(self, tag="pew pew"):
+    async def cog_unload(self):
+        """Close the aiohttp session when the cog is unloaded."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """Return the shared aiohttp session, creating it if necessary."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def get_random_gif(self, tag="pew pew"):
         """
         Fetches a random GIF URL from Giphy based on the provided tag.
         """
@@ -40,12 +53,13 @@ class FunCog(commands.Cog):
 
         url = f"https://api.giphy.com/v1/gifs/random?api_key={GIPHY_API_KEY}&tag={tag}&rating=pg-13"
         try:
-            response = requests.get(url)
-            response.raise_for_status()
-            data = response.json()
-            gif_url = data["data"]["images"]["original"]["url"]
-            logger.debug(f"Fetched GIF from Giphy: {gif_url}")
-            return gif_url
+            session = self._get_session()
+            async with session.get(url) as response:
+                response.raise_for_status()
+                data = await response.json()
+                gif_url = data["data"]["images"]["original"]["url"]
+                logger.debug(f"Fetched GIF from Giphy: {gif_url}")
+                return gif_url
         except Exception as e:
             logger.error(f"Failed to fetch GIF from Giphy: {e}")
             return None
@@ -78,7 +92,7 @@ class FunCog(commands.Cog):
         
     @app_commands.command(name="pew", description="Pew pew a member!")
     @app_commands.describe(member="The member to pew pew")
-    @commands.cooldown(1, 120, commands.BucketType.user)
+    @app_commands.checks.cooldown(1, 120, key=lambda i: i.user.id)
     async def pew(self, interaction: Interaction, member: discord.Member):
         logger.info(f"/pew invoked by {interaction.user} on {member}")
         try:
@@ -103,7 +117,7 @@ class FunCog(commands.Cog):
                 ]
                 
                 # Try to fetch a random GIF from Giphy
-                gif_url = self.get_random_gif()
+                gif_url = await self.get_random_gif()
                 if not gif_url:
                     gif_url = random.choice(shooting_gifs)
                 logger.debug(f"Using GIF: {gif_url}")
@@ -116,7 +130,7 @@ class FunCog(commands.Cog):
 
     @app_commands.command(name="coin", description="Flip a coin with another member.")
     @app_commands.describe(member="The member to flip a coin with")
-    @commands.cooldown(1, 120, commands.BucketType.user)
+    @app_commands.checks.cooldown(1, 120, key=lambda i: i.user.id)
     async def coin(self, interaction: Interaction, member: discord.Member = None):
         logger.info(f"/coin invoked by {interaction.user} with {member}")
         try:

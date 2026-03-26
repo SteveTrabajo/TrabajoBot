@@ -19,6 +19,10 @@ from util.db_utils import db_retry
 
 logger = logging.getLogger("TrabajoBot")
 
+_RESET_GUILD_ID = int(os.getenv("TEST_GUILD_ID", 0))
+if not _RESET_GUILD_ID:
+    logger.warning("TEST_GUILD_ID environment variable is not set. The /resetpickles command will not be registered to any guild.")
+
 class PickleConfig:
     """Configuration settings for the Pickle module"""
     MIN_SIZE = 3
@@ -106,7 +110,7 @@ class PickleData:
             SELECT recorded_at::date as date, size
             FROM pickle_history
             WHERE user_id = %s
-            AND recorded_at > NOW() - INTERVAL '%s MONTHS'
+            AND recorded_at > NOW() - (INTERVAL '1 MONTH' * %s)
             ORDER BY recorded_at ASC
         """, (user_id, months))
         return [(row['date'], row['size']) for row in self.db.fetchall(cursor)]
@@ -538,7 +542,7 @@ class Pickle(commands.Cog):
             
         except Exception as e:
             logger.error(f"Error in pickleboard command: {e}")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Sorry, something went wrong fetching the leaderboard!", 
                 ephemeral=True
             )
@@ -604,7 +608,7 @@ class Pickle(commands.Cog):
             )
 
     @app_commands.command(name="resetpickles", description="Reset all pickle sizes (Admin only)")
-    @app_commands.guilds(discord.Object(id=1165008766345953351))
+    @app_commands.guilds(discord.Object(id=_RESET_GUILD_ID))
     @app_commands.checks.has_permissions(administrator=True)
     async def reset_pickles(self, interaction: discord.Interaction):
         """Reset all pickle sizes (Admin only)"""
