@@ -28,7 +28,6 @@ All commands are implemented as **Discord Slash Commands** (Application Commands
 
 - **Language:** Python 3.8+
 - **Library:** [discord.py](https://github.com/Rapptz/discord.py)
-- **Music:** [Wavelink](https://wavelink.dev/) (Lavalink client)
 - **Database:** PostgreSQL via [CockroachDB](https://www.cockroachlabs.com/)
 - **Hosting:** PebbleHost
 
@@ -69,10 +68,6 @@ DB_PASS=your_db_password
 DB_NAME=your_db_name
 DB_PORT=26257
 
-# Optional — bot owner & admin features
-STEVEID=your_discord_user_id
-TEST_GUILD_ID=your_test_guild_id
-
 # Optional — fun commands
 GIPHY_API_KEY=your_giphy_api_key
 ```
@@ -109,7 +104,7 @@ python main.py
 | `/coin [member]` | Flip a coin (optionally challenge another member) |
 | `/pew <member>` | Shoot a member with a random GIF |
 
-### 🎵 Music *(currently under maintenance)*
+### 🎵 Music *(not working, currently under re-work)*
 | Command | Description |
 |---|---|
 | `/play <query>` | Play a song or playlist by name or URL |
