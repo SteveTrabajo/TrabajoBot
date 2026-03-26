@@ -97,7 +97,7 @@ class Database:
             if conn:
                 try:
                     conn.rollback()
-                except:
+                except Exception:
                     pass
             raise
         finally:
@@ -112,7 +112,7 @@ class Database:
                     # Connection is broken, close it
                     try:
                         conn.close()
-                    except:
+                    except Exception:
                         pass
 
     def execute(self, query: str, params: tuple = None, commit: bool = False) -> Optional[Any]:

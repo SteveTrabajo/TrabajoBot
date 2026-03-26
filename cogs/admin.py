@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger("TrabajoBot")
 
-ADMIN_USER_ID = int(os.getenv("STEVEID"))  # Your Discord ID
-TEST_GUILD_ID = int(os.getenv("TEST_GUILD_ID"))  # Your Test Guild ID
+load_dotenv()
+ADMIN_USER_ID = int(os.getenv("STEVEID", 0))  # Your Discord ID
 
 def is_owner(ctx):
     """Check if the command user is the bot owner (you)."""
@@ -177,7 +177,7 @@ class AdminCog(commands.Cog):
                 logger.info(f"Reloaded {cog}")
             except Exception as e:
                 if "has not been loaded" in str(e):
-                    await self.bot.load_extension(f"cogs.{cog}")
+                    await self.bot.load_extension(cog)
                     logger.info(f"Cog: {cog} not loaded, loading...")
                 else:
                     errors.append(f"❌ `{cog}`: {e}")

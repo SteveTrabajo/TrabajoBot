@@ -5,6 +5,7 @@ A Discord bot cog that handles the 'pickle size' game functionality.
 Includes commands for checking pickle sizes, leaderboard, and growth tracking graphs.
 """
 
+import asyncio
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -106,7 +107,7 @@ class PickleData:
             SELECT recorded_at::date as date, size
             FROM pickle_history
             WHERE user_id = %s
-            AND recorded_at > NOW() - INTERVAL '%s MONTHS'
+            AND recorded_at > NOW() - (%s * INTERVAL '1 MONTH')
             ORDER BY recorded_at ASC
         """, (user_id, months))
         return [(row['date'], row['size']) for row in self.db.fetchall(cursor)]
@@ -116,41 +117,44 @@ class PickleGraphs:
     """Handles all graph generation for the Pickle module"""
     @staticmethod
     async def create_history_graph(history: List[Tuple[datetime.date, int]], user: discord.Member) -> Tuple[io.BytesIO, dict]:
-        """Creates a graph of pickle size history"""
-        dates = [h[0] for h in history]
-        sizes = [h[1] for h in history]
+        """Creates a graph of pickle size history. Runs matplotlib in a thread to avoid blocking the event loop."""
+        def _build_graph() -> Tuple[io.BytesIO, dict]:
+            dates = [h[0] for h in history]
+            sizes = [h[1] for h in history]
 
-        plt.style.use('dark_background')
-        plt.figure(figsize=(10, 6))
-        plt.clf()
+            plt.style.use('dark_background')
+            plt.figure(figsize=(10, 6))
+            plt.clf()
 
-        # Create bars
-        bars = plt.bar([d.strftime('%b') for d in dates], sizes)
+            # Create bars
+            bars = plt.bar([d.strftime('%b') for d in dates], sizes)
 
-        # Color all bars white except max
-        max_idx = sizes.index(max(sizes))
-        for i, bar in enumerate(bars):
-            bar.set_color(PickleConfig.HIGHLIGHT_COLOR if i == max_idx else PickleConfig.GRAPH_COLOR)
+            # Color all bars white except max
+            max_idx = sizes.index(max(sizes))
+            for i, bar in enumerate(bars):
+                bar.set_color(PickleConfig.HIGHLIGHT_COLOR if i == max_idx else PickleConfig.GRAPH_COLOR)
 
-        # Customize the graph
-        plt.xlabel("Month")
-        plt.ylabel("Length (cm)")
-        plt.title(f"{user.display_name}'s Pickle Length - Last 12 Months")
+            # Customize the graph
+            plt.xlabel("Month")
+            plt.ylabel("Length (cm)")
+            plt.title(f"{user.display_name}'s Pickle Length - Last 12 Months")
 
-        # Save to BytesIO
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        plt.close()
+            # Save to BytesIO
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            plt.close()
 
-        # Calculate stats
-        stats = {
-            'max_month': dates[max_idx].strftime('%b'),
-            'max_size': sizes[max_idx],
-            'average': round(np.mean(sizes), 2)
-        }
+            # Calculate stats
+            stats = {
+                'max_month': dates[max_idx].strftime('%b'),
+                'max_size': sizes[max_idx],
+                'average': round(np.mean(sizes), 2)
+            }
 
-        return buf, stats
+            return buf, stats
+
+        return await asyncio.to_thread(_build_graph)
 
 class PickleBoardView(discord.ui.View):
     """View for the pickle leaderboard with toggle buttons"""
@@ -356,7 +360,7 @@ class PickleBoardView(discord.ui.View):
             # If interaction isn't responded to yet (like in deferred responses)
             try:
                 await interaction.response.edit_message(embed=embed, view=self)
-            except:
+            except Exception:
                 if self.message:
                     await self.message.edit(embed=embed, view=self)
             
@@ -538,8 +542,8 @@ class Pickle(commands.Cog):
             
         except Exception as e:
             logger.error(f"Error in pickleboard command: {e}")
-            await interaction.response.send_message(
-                "Sorry, something went wrong fetching the leaderboard!", 
+            await interaction.followup.send(
+                "Sorry, something went wrong fetching the leaderboard!",
                 ephemeral=True
             )
 
