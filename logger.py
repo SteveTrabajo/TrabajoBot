@@ -4,8 +4,8 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from datetime import datetime
 
-# Create logs directory if it doesn't exist
-logs_dir = Path("logs")
+# Create logs directory relative to this file, not the working directory
+logs_dir = Path(__file__).parent / "logs"
 logs_dir.mkdir(exist_ok=True)
 
 # Ensure logs have correct filenames
