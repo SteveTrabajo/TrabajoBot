@@ -7,8 +7,7 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger("TrabajoBot")
 
-ADMIN_USER_ID = int(os.getenv("STEVEID"))  # Your Discord ID
-TEST_GUILD_ID = int(os.getenv("TEST_GUILD_ID"))  # Your Test Guild ID
+ADMIN_USER_ID = int(os.getenv("STEVEID", 0))
 
 def is_owner(ctx):
     """Check if the command user is the bot owner (you)."""
@@ -30,7 +29,6 @@ class AdminCog(commands.Cog):
     # AUTOCOMPLETE FUNCTIONS FOR SERVER MESSAGING
     # ================================================================
     
-    @app_commands.autocomplete()
     async def guild_autocomplete(self, interaction: discord.Interaction, current: str):
         """Autocomplete for guild selection"""
         guilds = []
@@ -46,7 +44,6 @@ class AdminCog(commands.Cog):
         # Return up to 25 suggestions
         return guilds[:25]
 
-    @app_commands.autocomplete()
     async def channel_autocomplete(self, interaction: discord.Interaction, current: str):
         """Autocomplete for channel selection based on selected guild"""
         # Get the guild_id from the current command options

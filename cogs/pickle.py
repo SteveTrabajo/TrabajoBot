@@ -5,6 +5,8 @@ A Discord bot cog that handles the 'pickle size' game functionality.
 Includes commands for checking pickle sizes, leaderboard, and growth tracking graphs.
 """
 
+import asyncio
+import functools
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -66,8 +68,7 @@ class PickleData:
     @db_retry()
     async def get_size(self, user_id: int) -> Optional[int]:
         """Get current pickle size for a user"""
-        cursor = self.db.execute("SELECT current_size FROM pickle_sizes WHERE user_id = %s", (user_id,))
-        result = self.db.fetchone(cursor)
+        result = self.db.execute("SELECT current_size FROM pickle_sizes WHERE user_id = %s", (user_id,), fetch='one')
         return result['current_size'] if result else None
 
     @db_retry()
@@ -92,30 +93,29 @@ class PickleData:
     @db_retry()
     async def get_leaderboard(self) -> List[Dict]:
         """Get the current pickle size leaderboard"""
-        cursor = self.db.execute("""
-            SELECT user_id, current_size 
-            FROM pickle_sizes 
+        return self.db.execute("""
+            SELECT user_id, current_size
+            FROM pickle_sizes
             ORDER BY current_size DESC
-        """)
-        return self.db.fetchall(cursor)
+        """, fetch='all')
 
     @db_retry()
     async def get_history(self, user_id: int, months: int = 12) -> List[Tuple[datetime.date, int]]:
         """Get pickle size history for a user"""
-        cursor = self.db.execute("""
+        rows = self.db.execute("""
             SELECT recorded_at::date as date, size
             FROM pickle_history
             WHERE user_id = %s
-            AND recorded_at > NOW() - INTERVAL '%s MONTHS'
+            AND recorded_at > NOW() - (%s * INTERVAL '1 month')
             ORDER BY recorded_at ASC
-        """, (user_id, months))
-        return [(row['date'], row['size']) for row in self.db.fetchall(cursor)]
+        """, (user_id, months), fetch='all')
+        return [(row['date'], row['size']) for row in rows]
 
 
 class PickleGraphs:
     """Handles all graph generation for the Pickle module"""
     @staticmethod
-    async def create_history_graph(history: List[Tuple[datetime.date, int]], user: discord.Member) -> Tuple[io.BytesIO, dict]:
+    def create_history_graph(history: List[Tuple[datetime.date, int]], user: discord.Member) -> Tuple[io.BytesIO, dict]:
         """Creates a graph of pickle size history"""
         dates = [h[0] for h in history]
         sizes = [h[1] for h in history]
@@ -385,8 +385,8 @@ class Pickle(commands.Cog):
     async def monthly_reset(self):
         """Check if it's time for monthly reset and perform reset if needed"""
         try:
-            now = datetime.datetime.now()
-            # If it's the first day of the month and between 00:00 and 01:00
+            now = datetime.datetime.now(datetime.timezone.utc)
+            # If it's the first day of the month and between 00:00 and 01:00 UTC
             if now.day == 1 and now.hour == 0:
                 logger.info("Performing monthly pickle size reset...")
                 try:
@@ -560,8 +560,11 @@ class Pickle(commands.Cog):
                 await interaction.response.send_message(embed=embed)
                 return
 
-            # Generate graph
-            graph_buf, stats = await PickleGraphs.create_history_graph(history, target)
+            # Generate graph in a thread to avoid blocking the event loop
+            loop = asyncio.get_running_loop()
+            graph_buf, stats = await loop.run_in_executor(
+                None, functools.partial(PickleGraphs.create_history_graph, history, target)
+            )
             
             # Create embed
             embed = discord.Embed(
@@ -604,7 +607,7 @@ class Pickle(commands.Cog):
             )
 
     @app_commands.command(name="resetpickles", description="Reset all pickle sizes (Admin only)")
-    @app_commands.guilds(discord.Object(id=1165008766345953351))
+    @app_commands.guilds(discord.Object(id=int(os.getenv("TEST_GUILD_ID", 0))))
     @app_commands.checks.has_permissions(administrator=True)
     async def reset_pickles(self, interaction: discord.Interaction):
         """Reset all pickle sizes (Admin only)"""

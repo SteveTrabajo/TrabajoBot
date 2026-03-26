@@ -33,7 +33,6 @@ class HelpCog(commands.Cog):
     # ----------------------------------------------------------------
     #  AUTOCOMPLETE
     # ----------------------------------------------------------------
-    @app_commands.autocomplete()
     async def help_autocomplete(self, interaction: Interaction, current: str):
         """
         Return up to 25 combined suggestions (categories + commands), ignoring case.

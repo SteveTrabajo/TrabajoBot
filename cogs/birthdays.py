@@ -59,7 +59,7 @@ class BirthdaysCog(commands.Cog):
               SET birthday_date = EXCLUDED.birthday_date
         """
         try:
-            cursor = self.db.execute(query, (interaction.user.id, bday), commit=True)
+            self.db.execute(query, (interaction.user.id, bday), commit=True)
             logger.debug(f"Birthday set for user {interaction.user.id} to {bday}")
             await interaction.followup.send(f"Birthday set to {bday} for {interaction.user.mention}")
         except Exception as e:
@@ -76,8 +76,7 @@ class BirthdaysCog(commands.Cog):
             WHERE user_id = %s
         """
         try:
-            cursor = self.db.execute(query, (interaction.user.id,))
-            row = self.db.fetchone(cursor)
+            row = self.db.execute(query, (interaction.user.id,), fetch='one')
             if row:
                 logger.debug(f"User {interaction.user.id} birthday: {row['birthday_date']}")
                 await interaction.followup.send(f"Your birthday is set to **{row['birthday_date']}**.")
@@ -98,8 +97,7 @@ class BirthdaysCog(commands.Cog):
             ORDER BY birthday_date
         """
         try:
-            cursor = self.db.execute(query, ())
-            rows = self.db.fetchall(cursor)
+            rows = self.db.execute(query, (), fetch='all')
             if not rows:
                 logger.debug("No birthdays found.")
                 return await interaction.followup.send("No birthdays found.")
@@ -116,7 +114,18 @@ class BirthdaysCog(commands.Cog):
             if not lines:
                 return await interaction.followup.send("No birthdays found for members in this server.")
 
-            await interaction.followup.send("\n".join(lines))
+            # Chunk output to stay within Discord's 2000-character message limit
+            chunk, chunks = [], []
+            for line in lines:
+                if sum(len(l) + 1 for l in chunk) + len(line) > 1900:
+                    chunks.append("\n".join(chunk))
+                    chunk = []
+                chunk.append(line)
+            if chunk:
+                chunks.append("\n".join(chunk))
+
+            for piece in chunks:
+                await interaction.followup.send(piece)
         except Exception as e:
             logger.error(f"Database error when fetching birthday list: {e}")
             await interaction.followup.send("An error occurred while fetching the birthday list. Please try again later.")

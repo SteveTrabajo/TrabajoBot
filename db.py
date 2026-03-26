@@ -115,60 +115,42 @@ class Database:
                     except:
                         pass
 
-    def execute(self, query: str, params: tuple = None, commit: bool = False) -> Optional[Any]:
+    def execute(self, query: str, params: tuple = None, commit: bool = False, fetch: str = None) -> Optional[Any]:
         """
         Execute a query with automatic connection management.
-        
+
         Args:
             query: SQL query to execute
             params: Query parameters (default: None)
             commit: Whether to commit after execution (default: False)
-        
+            fetch: 'one' to return a single row dict, 'all' to return a list of row dicts,
+                   None to return nothing (default: None)
+
         Returns:
-            Cursor object for result fetching
+            None, a single row dict, or a list of row dicts depending on fetch
+
+        Raises:
+            Exception: on database error
         """
         if not query:
-            logger.error("Query is empty")
-            return None
-        
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor(cursor_factory=RealDictCursor)
-                try:
-                    logger.debug(f"Executing query: {query} | params: {params}")
-                    cursor.execute(query, params or ())
-                    
-                    if commit:
-                        conn.commit()
-                        logger.debug("Query committed successfully")
-                    
-                    return cursor
-                except Exception as e:
-                    logger.error(f"Query execution failed: {e}")
-                    raise
-        except Exception as e:
-            logger.error(f"Database operation failed: {e}")
-            return None
+            raise ValueError("Query cannot be empty")
 
-    def fetchone(self, cursor) -> Optional[Dict]:
-        """Fetch one row from cursor"""
-        if cursor is None:
-            return None
-        try:
-            return cursor.fetchone()
-        except Exception as e:
-            logger.error(f"Error fetching one row: {e}")
-            return None
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            logger.debug(f"Executing query: {query} | params: {params}")
+            cursor.execute(query, params or ())
 
-    def fetchall(self, cursor) -> List[Dict]:
-        """Fetch all rows from cursor"""
-        if cursor is None:
-            return []
-        try:
-            return cursor.fetchall()
-        except Exception as e:
-            logger.error(f"Error fetching all rows: {e}")
-            return []
+            result = None
+            if fetch == 'one':
+                result = cursor.fetchone()
+            elif fetch == 'all':
+                result = cursor.fetchall() or []
+
+            if commit:
+                conn.commit()
+                logger.debug("Query committed successfully")
+
+            return result
 
     def execute_transaction(self, queries: List[tuple]) -> bool:
         """
@@ -219,8 +201,7 @@ class Database:
             );
             """
             
-            cursor = self.execute(check_query, (table_name,))
-            result = self.fetchone(cursor)
+            result = self.execute(check_query, (table_name,), fetch='one')
             
             if result and result.get("exists"):
                 logger.info(f"Table '{table_name}' already exists.")
@@ -250,12 +231,6 @@ class Database:
         self.close_pool()
 
 
-# Singleton instance
-_db_instance = None
-
 def get_database() -> Database:
     """Get the singleton database instance"""
-    global _db_instance
-    if _db_instance is None:
-        _db_instance = Database()
-    return _db_instance
+    return Database()
