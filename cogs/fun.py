@@ -7,15 +7,13 @@ A Cog with simple slash commands for entertainment or fun interactions
 import os
 import logging
 import random
-import requests
-import discord  # Ensure discord is imported
+import aiohttp
+import discord
 from discord.ext import commands
 from discord import app_commands, Interaction
-from dotenv import load_dotenv
 
 logger = logging.getLogger("TrabajoBot")
 
-load_dotenv()
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 
 class FunCog(commands.Cog):
@@ -30,7 +28,7 @@ class FunCog(commands.Cog):
         self.bot = bot
         logger.debug("FunCog initialized.")
 
-    def get_random_gif(self, tag="pew pew"):
+    async def get_random_gif(self, tag="pew pew"):
         """
         Fetches a random GIF URL from Giphy based on the provided tag.
         """
@@ -40,12 +38,13 @@ class FunCog(commands.Cog):
 
         url = f"https://api.giphy.com/v1/gifs/random?api_key={GIPHY_API_KEY}&tag={tag}&rating=pg-13"
         try:
-            response = requests.get(url)
-            response.raise_for_status()
-            data = response.json()
-            gif_url = data["data"]["images"]["original"]["url"]
-            logger.debug(f"Fetched GIF from Giphy: {gif_url}")
-            return gif_url
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    gif_url = data["data"]["images"]["original"]["url"]
+                    logger.debug(f"Fetched GIF from Giphy: {gif_url}")
+                    return gif_url
         except Exception as e:
             logger.error(f"Failed to fetch GIF from Giphy: {e}")
             return None
@@ -103,7 +102,7 @@ class FunCog(commands.Cog):
                 ]
                 
                 # Try to fetch a random GIF from Giphy
-                gif_url = self.get_random_gif()
+                gif_url = await self.get_random_gif()
                 if not gif_url:
                     gif_url = random.choice(shooting_gifs)
                 logger.debug(f"Using GIF: {gif_url}")
@@ -136,6 +135,13 @@ class FunCog(commands.Cog):
         except Exception as e:
             logger.error(f"Problem: {e}")
             await interaction.response.send_message(f'Oops something went wrong, please try again or contact support.', ephemeral=True)
+
+    async def cog_app_command_error(self, interaction: Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.errors.CommandOnCooldown):
+            await interaction.response.send_message(
+                f"This command is on cooldown. Try again in **{error.retry_after:.0f}s**.",
+                ephemeral=True
+            )
 
 async def setup(bot: commands.Bot):
     logger.debug("Setting up FunCog...")

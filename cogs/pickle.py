@@ -21,19 +21,15 @@ from util.db_utils import db_retry
 
 logger = logging.getLogger("TrabajoBot")
 
-class PickleConfig:
-    """Configuration settings for the Pickle module"""
-    MIN_SIZE = 3
-    MAX_SIZE = 32
-    GRAPH_COLOR = 'white'
-    HIGHLIGHT_COLOR = 'purple'
-    EMBED_COLOR = discord.Color.purple()
-    PICKLE_EMOJI = "🍆"
-    
-    # Special user IDs loaded from environment
-    STEVE_ID = int(os.getenv('STEVEID', 0))
-    LIOR_ID = int(os.getenv('LIORID', 0))
-    SELF_ID = int(os.getenv('SELFID', 0))
+PICKLE_MIN_SIZE = 3
+PICKLE_MAX_SIZE = 32
+PICKLE_GRAPH_COLOR = 'white'
+PICKLE_HIGHLIGHT_COLOR = 'purple'
+PICKLE_EMBED_COLOR = discord.Color.purple()
+PICKLE_EMOJI = "🍆"
+PICKLE_STEVE_ID = int(os.getenv('STEVEID', 0))
+PICKLE_LIOR_ID = int(os.getenv('LIORID', 0))
+PICKLE_SELF_ID = int(os.getenv('SELFID', 0))
 
 class PickleData:
     """Handles all database operations for the Pickle module"""
@@ -87,8 +83,7 @@ class PickleData:
             """, (user_id, size))
         ]
         
-        if not self.db.execute_transaction(queries):
-            raise Exception("Failed to set pickle size")
+        self.db.execute_transaction(queries)
 
     @db_retry()
     async def get_leaderboard(self) -> List[Dict]:
@@ -130,7 +125,7 @@ class PickleGraphs:
         # Color all bars white except max
         max_idx = sizes.index(max(sizes))
         for i, bar in enumerate(bars):
-            bar.set_color(PickleConfig.HIGHLIGHT_COLOR if i == max_idx else PickleConfig.GRAPH_COLOR)
+            bar.set_color(PICKLE_HIGHLIGHT_COLOR if i == max_idx else PICKLE_GRAPH_COLOR)
 
         # Customize the graph
         plt.xlabel("Month")
@@ -276,9 +271,9 @@ class PickleBoardView(discord.ui.View):
             
             # Update message to show loading state
             embed = discord.Embed(
-                title=f"{PickleConfig.PICKLE_EMOJI} Global Pickle Leaderboard {PickleConfig.PICKLE_EMOJI}",
+                title=f"{PICKLE_EMOJI} Global Pickle Leaderboard {PICKLE_EMOJI}",
                 description="Loading global leaderboard...",
-                color=PickleConfig.EMBED_COLOR
+                color=PICKLE_EMBED_COLOR
             )
             await interaction.edit_original_response(embed=embed, view=self)
             
@@ -345,9 +340,9 @@ class PickleBoardView(discord.ui.View):
                 description = "Loading global leaderboard..."
 
             embed = discord.Embed(
-                title=f"{PickleConfig.PICKLE_EMOJI} {'Global' if self.is_global else 'Server'} Pickle Leaderboard {PickleConfig.PICKLE_EMOJI}",
+                title=f"{PICKLE_EMOJI} {'Global' if self.is_global else 'Server'} Pickle Leaderboard {PICKLE_EMOJI}",
                 description=description,
-                color=PickleConfig.EMBED_COLOR
+                color=PICKLE_EMBED_COLOR
             )
             
             # Update button states
@@ -356,7 +351,7 @@ class PickleBoardView(discord.ui.View):
             # If interaction isn't responded to yet (like in deferred responses)
             try:
                 await interaction.response.edit_message(embed=embed, view=self)
-            except:
+            except Exception:
                 if self.message:
                     await self.message.edit(embed=embed, view=self)
             
@@ -405,27 +400,23 @@ class Pickle(commands.Cog):
                         ("TRUNCATE TABLE pickle_sizes", ())
                     ]
                     
-                    if self.data.db.execute_transaction(queries):
-                        logger.info("Monthly pickle reset completed successfully")
-                        
-                        # Notify in all guilds where the bot is present
-                        for guild in self.bot.guilds:
-                            try:
-                                # Try to find a general or bot channel to send the message
-                                channel = next((ch for ch in guild.text_channels if ch.name in ['general', '🍁general' , 'bot', 'bot-commands', 'announcements', 'special-operations']), None)
-                                
-                                if channel:
-                                    await channel.send(
-                                        embed=discord.Embed(
-                                            title=f"{PickleConfig.PICKLE_EMOJI} Monthly Pickle Reset {PickleConfig.PICKLE_EMOJI}",
-                                            description="All pickle sizes have been reset for the new month! Use `/pickle` to get your new size!",
-                                            color=PickleConfig.EMBED_COLOR
-                                        )
+                    self.data.db.execute_transaction(queries)
+                    logger.info("Monthly pickle reset completed successfully")
+
+                    # Notify in all guilds where the bot is present
+                    for guild in self.bot.guilds:
+                        try:
+                            channel = next((ch for ch in guild.text_channels if ch.name in ['general', '🍁general', 'bot', 'bot-commands', 'announcements', 'special-operations']), None)
+                            if channel:
+                                await channel.send(
+                                    embed=discord.Embed(
+                                        title=f"{PICKLE_EMOJI} Monthly Pickle Reset {PICKLE_EMOJI}",
+                                        description="All pickle sizes have been reset for the new month! Use `/pickle` to get your new size!",
+                                        color=PICKLE_EMBED_COLOR
                                     )
-                            except Exception as e:
-                                logger.error(f"Failed to send reset notification in guild {guild.name}: {e}")
-                    else:
-                        logger.error("Monthly pickle reset transaction failed")
+                                )
+                        except Exception as e:
+                            logger.error(f"Failed to send reset notification in guild {guild.name}: {e}")
                         
                 except Exception as e:
                     logger.error(f"Failed to perform monthly pickle reset: {e}")
@@ -441,38 +432,38 @@ class Pickle(commands.Cog):
     def _get_size_message(self, user: discord.Member, size: int, is_new: bool, mentioned_by: Optional[discord.Member] = None) -> str:
         """Generate appropriate message based on user and size"""
         # If the bot itself is mentioned
-        if user.id == PickleConfig.SELF_ID:
-            if mentioned_by and mentioned_by.id == PickleConfig.STEVE_ID:
+        if user.id == PICKLE_SELF_ID:
+            if mentioned_by and mentioned_by.id == PICKLE_STEVE_ID:
                 return f"**Oh master, my pickle size could never be as big as yours.**\n\nIt is a mere **{size} cm**."
             else:
                 return f"I dunno, maybe ask your mom?\n\nJK, it's **{size}** cm."
         
         # If Steve is mentioned or uses the command
-        elif user.id == PickleConfig.STEVE_ID:
+        elif user.id == PICKLE_STEVE_ID:
             if is_new:
                 if size > 25:
-                    return f"**Master! You did well this month.**\nYour pickle size is **{size} cm**! {PickleConfig.PICKLE_EMOJI}"
+                    return f"**Master! You did well this month.**\nYour pickle size is **{size} cm**! {PICKLE_EMOJI}"
                 else:
-                    return f"**I am so sorry master, I have failed you.**\nYour peepee is **{size} cm** this month {PickleConfig.PICKLE_EMOJI}"
+                    return f"**I am so sorry master, I have failed you.**\nYour peepee is **{size} cm** this month {PICKLE_EMOJI}"
             else:
-                return f"Master, your pickle size is **{size} cm**! {PickleConfig.PICKLE_EMOJI}"
+                return f"Master, your pickle size is **{size} cm**! {PICKLE_EMOJI}"
         
         # If Lior is mentioned or uses the command
-        elif user.id == PickleConfig.LIOR_ID:
+        elif user.id == PICKLE_LIOR_ID:
             if mentioned_by:  # Someone mentioned Lior
                 if size < 10:
-                    return f"Pfft, pathetic. **Lior**'s size this month is just **{size} cm**.\nShameful {PickleConfig.PICKLE_EMOJI}"
+                    return f"Pfft, pathetic. **Lior**'s size this month is just **{size} cm**.\nShameful {PICKLE_EMOJI}"
                 else:
-                    return f"Looks like **Lior** got lucky this month.\nHe got a whopping **{size} cm**. {PickleConfig.PICKLE_EMOJI}"
+                    return f"Looks like **Lior** got lucky this month.\nHe got a whopping **{size} cm**. {PICKLE_EMOJI}"
             else:  # Lior used the command
                 if size > 10:
-                    return f"**DAMN Lior! You got lucky this month.**\nYour pickle size is **{size} cm**! {PickleConfig.PICKLE_EMOJI}"
+                    return f"**DAMN Lior! You got lucky this month.**\nYour pickle size is **{size} cm**! {PICKLE_EMOJI}"
                 else:
-                    return f"**HAH! Smol PP as always.**\nThose **{size} cm** couldn't even satisfy a fleshlight! {PickleConfig.PICKLE_EMOJI}"
+                    return f"**HAH! Smol PP as always.**\nThose **{size} cm** couldn't even satisfy a fleshlight! {PICKLE_EMOJI}"
         
         # For everyone else
         else:
-            return f"**{user.display_name}**'s pickle size is **{size} cm**! {PickleConfig.PICKLE_EMOJI}"
+            return f"**{user.display_name}**'s pickle size is **{size} cm**! {PICKLE_EMOJI}"
 
     @app_commands.command(name="pickle", description="Shows the size of your pickle")
     async def pickle(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
@@ -485,11 +476,11 @@ class Pickle(commands.Cog):
             is_new = size is None
             
             if is_new:
-                size = np.random.randint(PickleConfig.MIN_SIZE, PickleConfig.MAX_SIZE + 1)
+                size = np.random.randint(PICKLE_MIN_SIZE, PICKLE_MAX_SIZE + 1)
                 await self.data.set_size(target.id, size)
                 
             message = self._get_size_message(target, size, is_new, mentioned_by)
-            embed = discord.Embed(description=message, color=PickleConfig.EMBED_COLOR)
+            embed = discord.Embed(description=message, color=PICKLE_EMBED_COLOR)
             
             await interaction.response.send_message(embed=embed)
             
@@ -524,9 +515,9 @@ class Pickle(commands.Cog):
             
             # Create initial embed with the server leaderboard
             embed = discord.Embed(
-                title=f"{PickleConfig.PICKLE_EMOJI} Server Pickle Leaderboard {PickleConfig.PICKLE_EMOJI}",
+                title=f"{PICKLE_EMOJI} Server Pickle Leaderboard {PICKLE_EMOJI}",
                 description=view.get_current_page_content(),
-                color=PickleConfig.EMBED_COLOR
+                color=PICKLE_EMBED_COLOR
             )
             
             # Send the message with the prepared data
@@ -569,8 +560,8 @@ class Pickle(commands.Cog):
             # Create embed
             embed = discord.Embed(
                 title="Yearly Pickle Length History",
-                color=PickleConfig.EMBED_COLOR,
-                timestamp=datetime.datetime.now()
+                color=PICKLE_EMBED_COLOR,
+                timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
             
             # Add stats

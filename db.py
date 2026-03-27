@@ -94,11 +94,6 @@ class Database:
             yield conn
         except Error as e:
             logger.error(f"Database error: {e}")
-            if conn:
-                try:
-                    conn.rollback()
-                except:
-                    pass
             raise
         finally:
             if conn:
@@ -152,34 +147,23 @@ class Database:
 
             return result
 
-    def execute_transaction(self, queries: List[tuple]) -> bool:
+    def execute_transaction(self, queries: List[tuple]) -> None:
         """
         Execute multiple queries in a single transaction.
-        
+
         Args:
             queries: List of (query, params) tuples
-        
-        Returns:
-            True if successful, False otherwise
+
+        Raises:
+            Exception: on database error (connection cleanup and rollback handled by get_connection)
         """
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor(cursor_factory=RealDictCursor)
-                try:
-                    for query, params in queries:
-                        logger.debug(f"Executing: {query} | params: {params}")
-                        cursor.execute(query, params or ())
-                    
-                    conn.commit()
-                    logger.debug(f"Transaction with {len(queries)} queries committed successfully")
-                    return True
-                except Exception as e:
-                    conn.rollback()
-                    logger.error(f"Transaction failed, rolled back: {e}")
-                    raise
-        except Exception as e:
-            logger.error(f"Transaction execution failed: {e}")
-            return False
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            for query, params in queries:
+                logger.debug(f"Executing: {query} | params: {params}")
+                cursor.execute(query, params or ())
+            conn.commit()
+            logger.debug(f"Transaction with {len(queries)} queries committed successfully")
 
     def ensure_table_exists(self, table_name: str, creation_query: str) -> bool:
         """
