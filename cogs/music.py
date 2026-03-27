@@ -36,23 +36,6 @@ class MusicCog(commands.Cog):
     # ---------------------------------------------------------
     @tasks.loop(seconds=10)
     async def _audio_watchdog(self):
-        """
-        Three checks every 10 seconds:
-
-        1. Disconnected check — player._connected is False when Lavalink's voice
-           connection dropped, but player._current stays set. player.playing requires
-           _connected, so this state is invisible to normal checks and was the root
-           cause of 'nowplaying shows track but no audio'. Reconnect.
-
-        2. Raw-position check — player._last_position is the value last pushed by
-           Lavalink (not the locally-extrapolated one). If it hasn't moved AND
-           _last_update (monotonic_ns) is >15s old, Lavalink went completely silent
-           (node crash, hung source fetch). Reconnect.
-
-        3. Ghost-track check — Wavelink caps player.position at track.length once the
-           local clock says the track finished. If it stays capped across two cycles
-           and Lavalink never fired TrackEnd, the source hung mid-stream. Force-skip.
-        """
         for guild in self.bot.guilds:
             vc = guild.voice_client
             if not isinstance(vc, wavelink.Player):
@@ -66,11 +49,7 @@ class MusicCog(commands.Cog):
                 continue
 
             # --- check 1: ask Lavalink's REST API if it's still connected to Discord voice ---
-            # This is the ground truth. player.playing / _connected only reflect the bot-side
-            # state; the UDP audio stream can silently die without any event being fired.
-            # We read raw JSON instead of using fetch_player_info() because Wavelink's
-            # PlayerResponsePayload does data["pluginInfo"] with no default, crashing on
-            # public nodes that omit that field.
+            rest_connected: bool | None = None
             try:
                 node = player.node
                 if node.session_id:
@@ -79,7 +58,8 @@ class MusicCog(commands.Cog):
                     async with node._session.get(url, headers=headers) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            if not data.get("state", {}).get("connected", True):
+                            rest_connected = data.get("state", {}).get("connected")
+                            if not rest_connected:
                                 logger.warning(
                                     "Watchdog: Lavalink state.connected=False for guild %s"
                                     " — audio stream dead, reconnecting.",
@@ -87,12 +67,17 @@ class MusicCog(commands.Cog):
                                 )
                                 await self._reconnect_player(player)
                                 continue
+                        else:
+                            logger.warning(
+                                "Watchdog: REST returned HTTP %s for guild %s",
+                                resp.status, guild.id,
+                            )
             except Exception as e:
-                logger.debug("Watchdog REST check failed for guild %s: %s", guild.id, e)
+                logger.warning("Watchdog REST check failed for guild %s: %s", guild.id, e)
 
             # --- check 2: bot-side voice disconnected but track still set ---
-            connected: bool = getattr(player, "_connected", True)
-            if not connected:
+            bot_connected: bool = getattr(player, "_connected", True)
+            if not bot_connected:
                 logger.warning(
                     "Watchdog: player._connected=False in guild %s but track is set — reconnecting.",
                     guild.id,
@@ -103,24 +88,33 @@ class MusicCog(commands.Cog):
             if player.paused:
                 continue
 
-            # --- check 4: Lavalink stopped sending playerUpdate events ---
+            # --- check 3: Lavalink stopped sending playerUpdate events ---
             raw_now: int = getattr(player, "_last_position", 0)
             raw_last: int | None = getattr(player, "_wd_raw", None)
+            last_update_ns = getattr(player, "_last_update", None)
             player._wd_raw = raw_now
 
-            if raw_last is not None and raw_now == raw_last and raw_now > 3000:
-                last_update_ns = getattr(player, "_last_update", None)
-                if last_update_ns is not None:
-                    elapsed_ms = (time.monotonic_ns() - last_update_ns) // 1_000_000
-                    if elapsed_ms > 15_000:
-                        logger.warning(
-                            "Watchdog: no Lavalink playerUpdate for %sms in guild %s — reconnecting.",
-                            elapsed_ms, guild.id,
-                        )
-                        await self._reconnect_player(player)
-                        continue
+            elapsed_since_update_ms: int = 0
+            if last_update_ns is not None:
+                elapsed_since_update_ms = (time.monotonic_ns() - last_update_ns) // 1_000_000
 
-            # --- check 5: ghost track (position capped at track length) ---
+            logger.info(
+                "Watchdog guild %s: track=%r rest_connected=%s bot_connected=%s"
+                " raw_pos=%sms raw_last=%s elapsed_since_update=%sms",
+                guild.id, player.current.title, rest_connected, bot_connected,
+                raw_now, raw_last, elapsed_since_update_ms,
+            )
+
+            if raw_last is not None and raw_now == raw_last and raw_now > 3000:
+                if elapsed_since_update_ms > 15_000:
+                    logger.warning(
+                        "Watchdog: no Lavalink playerUpdate for %sms in guild %s — reconnecting.",
+                        elapsed_since_update_ms, guild.id,
+                    )
+                    await self._reconnect_player(player)
+                    continue
+
+            # --- check 4: ghost track (position capped at track length) ---
             calc_pos: int = player.position
             calc_last: int | None = getattr(player, "_wd_pos", None)
             player._wd_pos = calc_pos
