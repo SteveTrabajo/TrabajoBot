@@ -91,12 +91,16 @@ class InfoCog(commands.Cog):
 
     @app_commands.command(name="serverinfo", description="Displays info about the server.")
     @app_commands.describe(guild_id="The ID of the server to get info of")
-    async def serverinfo(self, interaction: Interaction, guild_id: int = None):
+    async def serverinfo(self, interaction: Interaction, guild_id: str = None):
         logger.info(f"/serverinfo invoked by {interaction.user} for guild {guild_id or interaction.guild.id}")
         await interaction.response.defer(thinking=True, ephemeral=False)
         try:
             if guild_id:
-                guild = self.bot.get_guild(guild_id)
+                try:
+                    guild = self.bot.get_guild(int(guild_id))
+                except ValueError:
+                    await interaction.followup.send("Invalid server ID — must be a number.", ephemeral=True)
+                    return
                 if not guild:
                     await interaction.followup.send(f"Server with ID {guild_id} not found.", ephemeral=True)
                     return
