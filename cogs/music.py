@@ -141,7 +141,7 @@ class MusicCog(commands.Cog):
             await player.disconnect()
             await asyncio.sleep(1)
             new_player: wavelink.Player = await channel.connect(
-                cls=wavelink.Player, timeout=30.0, self_deaf=True
+                cls=wavelink.Player, timeout=10.0, self_deaf=True
             )
             new_player.home = home
             new_player.autoplay = wavelink.AutoPlayMode.disabled
@@ -256,35 +256,60 @@ class MusicCog(commands.Cog):
 
     async def _get_or_connect_player(self, interaction: Interaction) -> wavelink.Player | None:
         """
-        Connect to the user's voice channel if no player exists, or return the current one.
+        Connect to the user's voice channel, trying each connected Lavalink node in
+        turn until one succeeds. Returns None and sends an error followup on failure.
         Assumes the interaction has already been deferred.
-        Returns None and sends an error followup on failure.
         """
         player = self._get_player(interaction)
-        if not player:
+        if player:
+            if not hasattr(player, "home"):
+                player.home = interaction.channel
+            return player
+
+        channel = interaction.user.voice.channel
+
+        nodes = list(wavelink.Pool.nodes.values())
+        if not nodes:
+            await interaction.followup.send("No Lavalink nodes are available right now.", ephemeral=True)
+            return None
+
+        for node in nodes:
+            # Build a one-off Player subclass that pins itself to this node.
+            # This lets us retry each node individually instead of letting
+            # Pool.get_node() always hand us the same (possibly broken) one.
+            _node = node  # capture for closure
+
+            class _PinnedPlayer(wavelink.Player):
+                def __init__(self, client, ch, **kw):
+                    super().__init__(client, ch, nodes=[_node], **kw)
+
             try:
-                player = await interaction.user.voice.channel.connect(
-                    cls=wavelink.Player,
-                    timeout=30.0,
-                    self_deaf=True,
-                )
+                player = await channel.connect(cls=_PinnedPlayer, timeout=10.0, self_deaf=True)
                 player.home = interaction.channel
                 player.autoplay = wavelink.AutoPlayMode.disabled
-            except wavelink.exceptions.ChannelTimeoutException as e:
-                logger.error("Lavalink connection timeout: %s", str(e))
-                await interaction.followup.send(
-                    "Timed out connecting to the Lavalink server. The public node may be overloaded — try again in a moment.",
-                    ephemeral=True,
-                )
-                return None
+                logger.info("Connected in guild %s via node '%s'.", interaction.guild.id, node.identifier)
+                return player
+            except wavelink.exceptions.ChannelTimeoutException:
+                logger.warning("Node '%s' timed out for guild %s — trying next.", node.identifier, interaction.guild.id)
+                # Ensure the bot is fully disconnected before retrying.
+                vc = interaction.guild.voice_client
+                if vc:
+                    try:
+                        await vc.disconnect(force=True)
+                    except Exception:
+                        pass
+                await asyncio.sleep(0.5)
             except (discord.ClientException, AttributeError) as e:
-                logger.error("Failed to join voice channel: %s", str(e))
+                logger.error("Failed to join voice channel: %s", e)
                 await interaction.followup.send("I couldn't join that voice channel.", ephemeral=True)
                 return None
-        elif not hasattr(player, "home"):
-            player.home = interaction.channel
 
-        return player
+        await interaction.followup.send(
+            f"All {len(nodes)} Lavalink nodes failed to connect. "
+            "Public nodes may be down or overloaded — please try again later.",
+            ephemeral=True,
+        )
+        return None
 
     # ---------------------------------------------------------
     # /play
