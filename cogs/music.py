@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import cast
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands, Interaction
 import wavelink
 
@@ -23,6 +23,80 @@ class MusicCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def cog_load(self):
+        self._audio_watchdog.start()
+
+    async def cog_unload(self):
+        self._audio_watchdog.cancel()
+
+    # ---------------------------------------------------------
+    # Audio watchdog
+    # ---------------------------------------------------------
+    @tasks.loop(seconds=10)
+    async def _audio_watchdog(self):
+        """
+        Every 10 seconds, check that each playing player's position is actually
+        advancing. If it isn't (Lavalink thinks it's playing but UDP audio is dead),
+        reconnect the player automatically.
+        """
+        for guild in self.bot.guilds:
+            vc = guild.voice_client
+            if not isinstance(vc, wavelink.Player):
+                continue
+            player: wavelink.Player = vc
+            if not player.playing or player.paused:
+                player._wd_position = None
+                continue
+
+            current_pos = player.position
+            last_pos: int | None = getattr(player, "_wd_position", None)
+            player._wd_position = current_pos
+
+            # Only flag stuck if we've been playing long enough to have a baseline
+            # and the position genuinely hasn't moved.
+            if last_pos is not None and current_pos <= last_pos and last_pos > 3000:
+                logger.warning(
+                    "Watchdog: audio stuck at %sms in guild %s — reconnecting.",
+                    current_pos, guild.id,
+                )
+                await self._reconnect_player(player)
+
+    @_audio_watchdog.before_loop
+    async def _watchdog_before(self):
+        await self.bot.wait_until_ready()
+
+    # ---------------------------------------------------------
+    # Shared reconnect helper
+    # ---------------------------------------------------------
+    async def _reconnect_player(self, player: wavelink.Player) -> None:
+        """Disconnect and reconnect a player, resuming from the same track and position."""
+        channel = player.channel
+        current = player.current
+        position = player.position
+        home = getattr(player, "home", None)
+
+        if not channel:
+            return
+
+        try:
+            await player.disconnect()
+            await asyncio.sleep(1)
+            new_player: wavelink.Player = await channel.connect(
+                cls=wavelink.Player, timeout=30.0, self_deaf=True
+            )
+            new_player.home = home
+            new_player.autoplay = wavelink.AutoPlayMode.disabled
+            if current:
+                await new_player.play(current, start=position)
+                logger.info("Reconnected and resumed %r at %sms.", current, position)
+        except Exception as e:
+            logger.error("Reconnect failed: %s", e)
+            if home:
+                await home.send(
+                    "Audio stream died and auto-reconnect failed. Please use `/play` again.",
+                    delete_after=20,
+                )
 
     # ---------------------------------------------------------
     # Events
@@ -89,33 +163,7 @@ class MusicCog(commands.Cog):
             player.guild.id, payload.code, payload.reason,
         )
 
-        channel = player.channel
-        current = player.current
-        position = player.position
-        home = getattr(player, "home", None)
-
-        if not channel:
-            return
-
-        try:
-            await player.disconnect()
-            await asyncio.sleep(2)
-            new_player: wavelink.Player = await channel.connect(
-                cls=wavelink.Player, timeout=30.0, self_deaf=True
-            )
-            new_player.home = home
-            new_player.autoplay = wavelink.AutoPlayMode.disabled
-            if current:
-                await new_player.play(current, start=position)
-                logger.info("Reconnected and resumed %r at %sms.", current, position)
-        except Exception as e:
-            logger.error("Voice reconnect failed in guild %s: %s", player.guild.id, e)
-            if home:
-                await home.send(
-                    "Lost the voice connection and couldn't reconnect automatically. "
-                    "Please use `/play` to start again.",
-                    delete_after=20,
-                )
+        await self._reconnect_player(player)
 
     @commands.Cog.listener()
     async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
