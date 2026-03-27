@@ -64,9 +64,7 @@ class ModerationCog(commands.Cog):
     async def unban_member(self, interaction: Interaction, username: str):
         logger.info(f"/unban invoked by {interaction.user} for {username}")
         await interaction.response.defer(thinking=True, ephemeral=False)
-        banned_users = await interaction.guild.bans()
-
-        for ban_entry in banned_users:
+        async for ban_entry in interaction.guild.bans():
             if ban_entry.user.name.lower() == username.lower():
                 await interaction.guild.unban(ban_entry.user)
                 logger.info(f"Unbanned {ban_entry.user}.")

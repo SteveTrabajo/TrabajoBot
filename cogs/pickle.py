@@ -534,12 +534,12 @@ class Pickle(commands.Cog):
             view.message = message
             
             # Start background task for global data
-            self.bot.loop.create_task(view.prepare_global_leaderboard())
+            asyncio.create_task(view.prepare_global_leaderboard())
             
         except Exception as e:
             logger.error(f"Error in pickleboard command: {e}")
-            await interaction.response.send_message(
-                "Sorry, something went wrong fetching the leaderboard!", 
+            await interaction.followup.send(
+                "Sorry, something went wrong fetching the leaderboard!",
                 ephemeral=True
             )
 

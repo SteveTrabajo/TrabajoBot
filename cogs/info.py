@@ -42,13 +42,14 @@ class InfoCog(commands.Cog):
         logger.info(f"/userinfo invoked by {interaction.user} (target: {member or 'self'})")
 
         if member is None:
-            member = interaction.user  
-        
+            member = interaction.user
+
+        original_name = member.display_name
         member = interaction.guild.get_member(member.id)
 
         if member is None:
             await interaction.followup.send(
-                f"**{member}** is not in this server (or I can't access them)."
+                f"**{original_name}** is not in this server (or I can't access them)."
             )
             return
 
@@ -117,9 +118,9 @@ class InfoCog(commands.Cog):
             embed.add_field(name="Boost Count", value=f"{guild.premium_subscription_count}/14", inline=True)
             embed.add_field(name="Channel Count", value=len(guild.channels), inline=True)
             embed.add_field(name="Created", value=created, inline=True)
-            embed.add_field(name="Description", value=guild.description, inline=False)
-            
-            embed.set_footer(text=guild.id, icon_url="https://cryptologos.cc/logos/space-id-id-logo.png")
+            embed.add_field(name="Description", value=guild.description or "No description", inline=False)
+
+            embed.set_footer(text=str(guild.id), icon_url="https://cryptologos.cc/logos/space-id-id-logo.png")
             
             # Send the embed as a response to the interaction
             await interaction.followup.send(embed=embed)

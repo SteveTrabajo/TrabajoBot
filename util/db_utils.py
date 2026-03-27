@@ -45,9 +45,6 @@ def db_retry(max_retries=3):
                     
                     # Non-retryable error or max retries exceeded
                     raise
-            
-            if last_error:
-                raise last_error
-                
+
         return wrapper
     return decorator

@@ -78,7 +78,7 @@ class FunCog(commands.Cog):
         
     @app_commands.command(name="pew", description="Pew pew a member!")
     @app_commands.describe(member="The member to pew pew")
-    @commands.cooldown(1, 120, commands.BucketType.user)
+    @app_commands.checks.cooldown(1, 120.0)
     async def pew(self, interaction: Interaction, member: discord.Member):
         logger.info(f"/pew invoked by {interaction.user} on {member}")
         try:
@@ -116,7 +116,7 @@ class FunCog(commands.Cog):
 
     @app_commands.command(name="coin", description="Flip a coin with another member.")
     @app_commands.describe(member="The member to flip a coin with")
-    @commands.cooldown(1, 120, commands.BucketType.user)
+    @app_commands.checks.cooldown(1, 120.0)
     async def coin(self, interaction: Interaction, member: discord.Member = None):
         logger.info(f"/coin invoked by {interaction.user} with {member}")
         try:

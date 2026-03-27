@@ -174,7 +174,7 @@ class AdminCog(commands.Cog):
                 logger.info(f"Reloaded {cog}")
             except Exception as e:
                 if "has not been loaded" in str(e):
-                    await self.bot.load_extension(f"cogs.{cog}")
+                    await self.bot.load_extension(cog)
                     logger.info(f"Cog: {cog} not loaded, loading...")
                 else:
                     errors.append(f"❌ `{cog}`: {e}")
