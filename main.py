@@ -9,6 +9,7 @@ import os
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+import wavelink
 
 # Import the logger configuration
 from logger import logger
@@ -37,6 +38,16 @@ class MyBot(commands.Bot):
                     logger.info(f"Loaded extension: {cog_name}")
                 except Exception as e:
                     logger.error(f"Failed to load cog {cog_name}: {e}")
+
+        # Connect to Lavalink node for music
+        lavalink_uri = os.getenv("LAVALINK_URI")
+        lavalink_password = os.getenv("LAVALINK_PASSWORD")
+        if lavalink_uri and lavalink_password:
+            node = wavelink.Node(uri=lavalink_uri, password=lavalink_password)
+            await wavelink.Pool.connect(nodes=[node], client=self, cache_capacity=100)
+            logger.info("Connected to Lavalink node.")
+        else:
+            logger.warning("LAVALINK_URI or LAVALINK_PASSWORD not set. Music features will be unavailable.")
 
         # Sync commands with Discord
         synced = await self.tree.sync()

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 python main.py
 ```
 
-Requires a `.env` file with: `DISCORD_BOT_TOKEN`, `DATABASE_URL` (or individual `DB_HOST/USER/PASS/NAME/PORT`), `SPOTIFY_CLIENT_ID`, `SPOTIFY_SECRET`, `GIPHY_API_KEY`, `STEVEID`, `LIORID`, `SELFID`, `TEST_GUILD_ID`.
+Requires a `.env` file with: `DISCORD_BOT_TOKEN`, `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`, `DB_PORT`, `GIPHY_API_KEY`, `STEVEID`, `LIORID`, `SELFID`, `TEST_GUILD_ID`, `LAVALINK_URI`, `LAVALINK_PASSWORD`.
 
 ## Architecture
 
@@ -47,7 +47,7 @@ Cogs with DB access use `@db_retry()` on methods that call the database, and use
 - Commands use `await interaction.response.defer()` before any async work, then `interaction.followup.send()` to respond.
 - Owner-only commands check `str(interaction.user.id) == STEVEID` (from env).
 - Moderation commands use `@app_commands.default_permissions(kick_members=True)` etc.
-- Maintenance mode: `music.py` has `MAINTENANCE_MODE = True` — commands return early with a maintenance message.
+
 
 ### Database Tables
 
@@ -59,4 +59,4 @@ Managed by cogs that create their own tables on first use:
 
 - `pickle.py` (largest, ~624 lines) — "Pickle size" game with leaderboard and matplotlib growth graphs. Contains `PickleConfig` and `PickleData` helper classes.
 - `admin.py` — Owner-only commands including sending messages as the bot; uses guild/channel autocomplete.
-- `music.py` — Music via Wavelink (currently in maintenance mode, `MAINTENANCE_MODE = True`).
+- `music.py` — Music via Wavelink 3.x + Lavalink 4.x. Commands: `/play`, `/skip`, `/pause`, `/stop`, `/queue`, `/nowplaying`, `/volume`, `/loop`, `/shuffle`, `/nightcore`, `/resetfilters`, `/disconnect`. Spotify requires the LavaSrc plugin on the Lavalink server.

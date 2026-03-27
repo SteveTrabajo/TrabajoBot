@@ -1,264 +1,363 @@
+"""
+music.py
+========
+Music commands using Wavelink 3.x + Lavalink 4.x.
+Supports YouTube, Spotify (via LavaSrc plugin), SoundCloud, playlists, and free text search.
+"""
+
 import logging
 from typing import cast
-import asyncio
 import discord
 from discord.ext import commands
 from discord import app_commands, Interaction
-from functools import wraps
-
 import wavelink
 
 logger = logging.getLogger("TrabajoBot")
 
-def maintenance_check(func):
-    """Decorator that checks if maintenance mode is on before executing a command."""
-    @wraps(func)
-    async def wrapper(self, interaction: Interaction, *args, **kwargs):
-        if self.MAINTENANCE_MODE:
-            await interaction.response.send_message("Music commands are under maintenance right now.", ephemeral=True)
-            return
-        return await func(self, interaction, *args, **kwargs)
-    return wrapper
 
 class MusicCog(commands.Cog):
-
     cog_name = "Music"
-    cog_description = "Play music with the bot"
-    MAINTENANCE_MODE = True  # Set to False to enable music commands
-    
+    cog_description = "Play music in voice channels"
+    cog_icon = "🎵"
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    class ResetFiltersButton(discord.ui.Button):
-        def __init__(self, interaction: Interaction, player: wavelink.Player, parent_cog):
-            super().__init__(label="Reset Filters", style=discord.ButtonStyle.danger)
-            self.interaction = interaction
-            self.player = player
-            self.parent_cog = parent_cog
-
-        async def callback(self, interaction: Interaction):
-            await self.parent_cog.reset_player_filters(interaction, self.player)
-            self.disabled = True
-            await self.interaction.edit_original_response(content="Player filters reset.", view=None)
-            await asyncio.sleep(5)
-            await self.interaction.delete_original_response()
-
-    async def reset_player_filters(self, interaction: Interaction, player: wavelink.Player):
-        filters = player.filters
-        filters.reset()
-        await player.set_filters(filters)
-
     # ---------------------------------------------------------
-    # Events from snippet
+    # Events
     # ---------------------------------------------------------
     @commands.Cog.listener()
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
         logger.info("Wavelink Node connected: %r | Resumed: %s", payload.node, payload.resumed)
-    
+
     @commands.Cog.listener()
     async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
-        """
-        Sends a 'Now Playing' embed to the player's home channel if set.
-        """
         player: wavelink.Player | None = payload.player
         if not player:
-            # Edge case
             return
 
-        original: wavelink.Playable | None = payload.original
         track: wavelink.Playable = payload.track
-
-        embed = discord.Embed(title="Now Playing")
+        embed = discord.Embed(title="Now Playing", color=discord.Color.blurple())
         embed.description = f"**{track.title}** by `{track.author}`"
 
         if track.artwork:
-            embed.set_image(url=track.artwork)
-
-        if original and original.recommended:
-            embed.description += f"\n\n`This track was recommended via {track.source}`"
+            embed.set_thumbnail(url=track.artwork)
 
         if track.album.name:
             embed.add_field(name="Album", value=track.album.name)
 
-        # From snippet: "await player.home.send(embed=embed)"
-        if hasattr(player, "home") and player.home:
-            await player.home.send(embed=embed)
+        if track.length:
+            minutes, seconds = divmod(track.length // 1000, 60)
+            embed.add_field(name="Duration", value=f"{minutes}:{seconds:02d}")
+
+        home = getattr(player, "home", None)
+        if home:
+            await home.send(embed=embed)
 
     # ---------------------------------------------------------
-    # Utility: Check voice
+    # Helpers
     # ---------------------------------------------------------
-    async def ensure_voice(self, interaction: Interaction) -> bool:
+    def _get_player(self, interaction: Interaction) -> wavelink.Player | None:
+        """Get the existing player for the guild, or None."""
+        return cast(wavelink.Player, interaction.guild.voice_client)
+
+    async def _get_or_connect_player(self, interaction: Interaction) -> wavelink.Player | None:
+        """
+        Connect to the user's voice channel if no player exists, or return the current one.
+        Assumes the interaction has already been deferred.
+        Returns None and sends an error followup on failure.
+        """
+        player = self._get_player(interaction)
+        if not player:
+            try:
+                player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
+                player.home = interaction.channel
+                player.autoplay = wavelink.AutoPlayMode.disabled
+            except (discord.ClientException, AttributeError):
+                await interaction.followup.send("I couldn't join that voice channel.", ephemeral=True)
+                return None
+        elif not hasattr(player, "home"):
+            player.home = interaction.channel
+
+        return player
+
+    # ---------------------------------------------------------
+    # /play
+    # ---------------------------------------------------------
+    @app_commands.command(name="play", description="Play a song. Accepts YouTube/Spotify/SoundCloud URLs or a search query.")
+    @app_commands.describe(query="Song name, search query, or URL")
+    async def play(self, interaction: Interaction, query: str):
         if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message(
-                "Please join a voice channel first before using this command.",
-                ephemeral=True
-            )
-            return False
-        return True
-
-    # ---------------------------------------------------------
-    # /play from snippet
-    # ---------------------------------------------------------
-    @maintenance_check
-    @app_commands.command(name="play", description="Play a song with the given query (autoplay enabled).")
-    @app_commands.describe(query="Search terms or link.")
-    async def slash_play(self, interaction: Interaction, query: str):
-        """
-        The snippet's 'play' logic but as a slash command:
-         - Connect if needed
-         - Autoplay = enabled
-         - If not player.playing: player.play(...)
-        """
-        if not await self.ensure_voice(interaction):
+            await interaction.response.send_message("You need to join a voice channel first.", ephemeral=True)
             return
 
         await interaction.response.defer()
 
-        # Wavelink Player from voice_client
-        player: wavelink.Player = cast(wavelink.Player, interaction.guild.voice_client)
+        player = await self._get_or_connect_player(interaction)
         if not player:
-            # connect
-            try:
-                channel = interaction.user.voice.channel
-                player = await channel.connect(cls=wavelink.Player)
-            except discord.ClientException:
-                return await interaction.followup.send("I was unable to join that voice channel. Try again.")
-        
-        # Autoplay
-        player.autoplay = wavelink.AutoPlayMode.partial
+            return
 
-        # If snippet: "Lock the player to this channel"
-        if not hasattr(player, "home"):
-            player.home = interaction.channel
-        elif player.home != interaction.channel:
-            return await interaction.followup.send(
-                f"You can only play songs in {player.home.mention}, since the player has already started there."
+        home = getattr(player, "home", None)
+        if home and home != interaction.channel:
+            await interaction.followup.send(
+                f"Music commands must be used in {home.mention}.", ephemeral=True
             )
+            return
 
-        # Doc snippet: "tracks: wavelink.Search = await wavelink.Playable.search(query)"
         tracks: wavelink.Search = await wavelink.Playable.search(query)
         if not tracks:
-            return await interaction.followup.send(
-                f"Could not find any tracks with that query. Please try again."
-            )
+            await interaction.followup.send("No tracks found for that query.", ephemeral=True)
+            return
 
         if isinstance(tracks, wavelink.Playlist):
-            # It's a playlist
-            added = await player.queue.put_wait(tracks)
-            await interaction.followup.send(f"Added the playlist **`{tracks.name}`** ({added} songs) to the queue.")
+            added: int = await player.queue.put_wait(tracks)
+            await interaction.followup.send(
+                f"Added playlist **{tracks.name}** — `{added}` tracks to the queue."
+            )
         else:
-            track_obj = tracks[0]
-            await player.queue.put_wait(track_obj)
-            await interaction.followup.send(f"Added **`{track_obj.title}`** to the queue.")
+            track: wavelink.Playable = tracks[0]
+            await player.queue.put_wait(track)
+            await interaction.followup.send(f"Added **{track.title}** to the queue.")
 
-        # The snippet: "if not player.playing: ...  # Play now"
         if not player.playing:
-            # "await player.play(player.queue.get(), volume=30)"
-            next_t = player.queue.get()
-            await player.play(next_t, volume=30)
-            # optionally send a "Now playing" message
-            # await interaction.followup.send(f"Now playing: **{next_t.title}**")
+            await player.play(player.queue.get(), volume=80)
 
     # ---------------------------------------------------------
     # /skip
     # ---------------------------------------------------------
-    @maintenance_check
     @app_commands.command(name="skip", description="Skip the current song.")
-    async def slash_skip(self, interaction: Interaction):
-        """Skip song"""
-        player: wavelink.Player = cast(wavelink.Player, interaction.guild.voice_client)
-        if not player:
-            return await interaction.response.send_message("No player to skip.", ephemeral=True)
+    async def skip(self, interaction: Interaction):
+        player = self._get_player(interaction)
+        if not player or not player.playing:
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+            return
 
         await interaction.response.defer()
         await player.skip(force=True)
-        await interaction.followup.send("Skipped track.")
+        await interaction.followup.send("Skipped.")
 
     # ---------------------------------------------------------
-    # /nightcore
+    # /pause
     # ---------------------------------------------------------
-    @maintenance_check
-    @app_commands.command(name="nightcore", description="Set the filter to a nightcore style.")
-    async def slash_nightcore(self, interaction: Interaction):
-        """Snippets 'nightcore' command sets pitch=1.2, speed=1.2, rate=1"""
-        player: wavelink.Player = cast(wavelink.Player, interaction.guild.voice_client)
+    @app_commands.command(name="pause", description="Pause or resume the player.")
+    async def pause(self, interaction: Interaction):
+        player = self._get_player(interaction)
         if not player:
-            return await interaction.response.send_message("No player to apply nightcore to.", ephemeral=True)
-
-        await interaction.response.defer()
-        filters = player.filters
-        filters.timescale.set(pitch=1.2, speed=1.2, rate=1)
-        await player.set_filters(filters)
-
-        view = discord.ui.View()
-        view.add_item(self.ResetFiltersButton(interaction, player, self))
-
-        await interaction.followup.send("Nightcore filter applied (pitch=1.2, speed=1.2).", view=view)
-
-    # ---------------------------------------------------------
-    # /resetfilters
-    # ---------------------------------------------------------
-    @maintenance_check
-    @app_commands.command(name="resetfilters", description="Resets all player filters")
-    async def slash_resetfilters(self, interaction: Interaction):
-        """Resets filters"""
-        player: wavelink.Player = cast(wavelink.Player, interaction.guild.voice_client)
-        if not player:
-            return await interaction.response.send_message("No player to reset filters.", ephemeral=True)
-
-        await interaction.response.defer()
-        await self.reset_player_filters(interaction, player)
-        await interaction.followup.send("Player filters reset.", delete_after=5)
-
-    # ---------------------------------------------------------
-    # /toggle = snippet's pause/resume
-    # ---------------------------------------------------------
-    @maintenance_check
-    @app_commands.command(name="toggle", description="Pause or Resume the player depending on its current state.")
-    async def slash_toggle(self, interaction: Interaction):
-        player: wavelink.Player = cast(wavelink.Player, interaction.guild.voice_client)
-        if not player:
-            return await interaction.response.send_message("No player found to toggle.", ephemeral=True)
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+            return
 
         await interaction.response.defer()
         await player.pause(not player.paused)
-        await interaction.followup.send("Toggled pause/resume.")
+        state = "Paused" if player.paused else "Resumed"
+        await interaction.followup.send(f"{state}.")
+
+    # ---------------------------------------------------------
+    # /stop
+    # ---------------------------------------------------------
+    @app_commands.command(name="stop", description="Stop playback and clear the queue.")
+    async def stop(self, interaction: Interaction):
+        player = self._get_player(interaction)
+        if not player:
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        player.queue.clear()
+        if player.playing:
+            await player.skip(force=True)
+        await interaction.followup.send("Stopped playback and cleared the queue.")
+
+    # ---------------------------------------------------------
+    # /queue
+    # ---------------------------------------------------------
+    @app_commands.command(name="queue", description="Show the current queue.")
+    async def queue(self, interaction: Interaction):
+        player = self._get_player(interaction)
+        if not player:
+            await interaction.response.send_message("No player active.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        queue_list = list(player.queue)
+        if not queue_list and not player.current:
+            await interaction.followup.send("The queue is empty.")
+            return
+
+        embed = discord.Embed(title="Queue", color=discord.Color.blurple())
+
+        if player.current:
+            track = player.current
+            duration_str = ""
+            if track.length:
+                minutes, seconds = divmod(track.length // 1000, 60)
+                duration_str = f" `{minutes}:{seconds:02d}`"
+            embed.add_field(
+                name="Now Playing",
+                value=f"**{track.title}** by `{track.author}`{duration_str}",
+                inline=False
+            )
+
+        if queue_list:
+            lines = []
+            for i, track in enumerate(queue_list[:20], 1):
+                duration_str = ""
+                if track.length:
+                    minutes, seconds = divmod(track.length // 1000, 60)
+                    duration_str = f" `{minutes}:{seconds:02d}`"
+                lines.append(f"`{i}.` **{track.title}**{duration_str}")
+
+            embed.add_field(name="Up Next", value="\n".join(lines), inline=False)
+
+            if len(queue_list) > 20:
+                embed.set_footer(text=f"...and {len(queue_list) - 20} more tracks")
+
+        await interaction.followup.send(embed=embed)
+
+    # ---------------------------------------------------------
+    # /nowplaying
+    # ---------------------------------------------------------
+    @app_commands.command(name="nowplaying", description="Show what's currently playing.")
+    async def nowplaying(self, interaction: Interaction):
+        player = self._get_player(interaction)
+        if not player or not player.current:
+            await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        track = player.current
+
+        embed = discord.Embed(title="Now Playing", color=discord.Color.blurple())
+        embed.description = f"**{track.title}** by `{track.author}`"
+
+        if track.artwork:
+            embed.set_thumbnail(url=track.artwork)
+
+        if track.album.name:
+            embed.add_field(name="Album", value=track.album.name)
+
+        if track.length:
+            minutes, seconds = divmod(track.length // 1000, 60)
+            embed.add_field(name="Duration", value=f"{minutes}:{seconds:02d}")
+
+        if player.position and track.length:
+            pos_min, pos_sec = divmod(player.position // 1000, 60)
+            embed.add_field(name="Position", value=f"{pos_min}:{pos_sec:02d}")
+
+        loop_labels = {
+            wavelink.QueueMode.normal: "Off",
+            wavelink.QueueMode.loop: "Track",
+            wavelink.QueueMode.loop_all: "Queue",
+        }
+        embed.add_field(name="Loop", value=loop_labels.get(player.queue.mode, "Off"))
+        embed.add_field(name="Volume", value=f"{player.volume}%")
+
+        await interaction.followup.send(embed=embed)
 
     # ---------------------------------------------------------
     # /volume
     # ---------------------------------------------------------
-    @maintenance_check
-    @app_commands.command(name="volume", description="Change the volume of the player.")
-    @app_commands.describe(value="Volume to set.")
-    async def slash_volume(self, interaction: Interaction, value: int):
-        """
-        snippet: "await player.set_volume(value)"
-        """
-        player: wavelink.Player = cast(wavelink.Player, interaction.guild.voice_client)
+    @app_commands.command(name="volume", description="Set the player volume (0-100).")
+    @app_commands.describe(value="Volume level between 0 and 100")
+    async def volume(self, interaction: Interaction, value: app_commands.Range[int, 0, 100]):
+        player = self._get_player(interaction)
         if not player:
-            return await interaction.response.send_message("No player to set volume for.", ephemeral=True)
+            await interaction.response.send_message("No player active.", ephemeral=True)
+            return
 
         await interaction.response.defer()
         await player.set_volume(value)
-        await interaction.followup.send(f"Volume set to {value}.")
+        await interaction.followup.send(f"Volume set to `{value}%`.")
 
     # ---------------------------------------------------------
-    # /disconnect (alias=dc)
+    # /loop
     # ---------------------------------------------------------
-    @maintenance_check
-    @app_commands.command(name="disconnect", description="Disconnect the Player.")
-    async def slash_disconnect(self, interaction: Interaction):
-        """Disconnect the player from voice channel."""
-        player: wavelink.Player = cast(wavelink.Player, interaction.guild.voice_client)
+    @app_commands.command(name="loop", description="Set the loop mode.")
+    @app_commands.describe(mode="Loop mode: off, track, or queue")
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="Off", value="off"),
+        app_commands.Choice(name="Track", value="track"),
+        app_commands.Choice(name="Queue", value="queue"),
+    ])
+    async def loop(self, interaction: Interaction, mode: str):
+        player = self._get_player(interaction)
         if not player:
-            return await interaction.response.send_message("I'm not in a voice channel.", ephemeral=True)
+            await interaction.response.send_message("No player active.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        mode_map = {
+            "off": wavelink.QueueMode.normal,
+            "track": wavelink.QueueMode.loop,
+            "queue": wavelink.QueueMode.loop_all,
+        }
+        player.queue.mode = mode_map[mode]
+        await interaction.followup.send(f"Loop mode set to **{mode}**.")
+
+    # ---------------------------------------------------------
+    # /shuffle
+    # ---------------------------------------------------------
+    @app_commands.command(name="shuffle", description="Shuffle the queue.")
+    async def shuffle(self, interaction: Interaction):
+        player = self._get_player(interaction)
+        if not player:
+            await interaction.response.send_message("No player active.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        if player.queue.is_empty:
+            await interaction.followup.send("The queue is empty.", ephemeral=True)
+            return
+
+        player.queue.shuffle()
+        await interaction.followup.send("Queue shuffled.")
+
+    # ---------------------------------------------------------
+    # /nightcore
+    # ---------------------------------------------------------
+    @app_commands.command(name="nightcore", description="Apply a nightcore audio filter (faster + higher pitch).")
+    async def nightcore(self, interaction: Interaction):
+        player = self._get_player(interaction)
+        if not player:
+            await interaction.response.send_message("No player active.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        filters: wavelink.Filters = player.filters
+        filters.timescale.set(pitch=1.2, speed=1.2, rate=1)
+        await player.set_filters(filters)
+        await interaction.followup.send("Nightcore filter applied. Use `/resetfilters` to revert.")
+
+    # ---------------------------------------------------------
+    # /resetfilters
+    # ---------------------------------------------------------
+    @app_commands.command(name="resetfilters", description="Reset all audio filters.")
+    async def resetfilters(self, interaction: Interaction):
+        player = self._get_player(interaction)
+        if not player:
+            await interaction.response.send_message("No player active.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        filters: wavelink.Filters = player.filters
+        filters.reset()
+        await player.set_filters(filters)
+        await interaction.followup.send("All filters reset.")
+
+    # ---------------------------------------------------------
+    # /disconnect
+    # ---------------------------------------------------------
+    @app_commands.command(name="disconnect", description="Disconnect the bot from the voice channel.")
+    async def disconnect(self, interaction: Interaction):
+        player = self._get_player(interaction)
+        if not player:
+            await interaction.response.send_message("I'm not in a voice channel.", ephemeral=True)
+            return
 
         await interaction.response.defer()
         await player.disconnect()
         await interaction.followup.send("Disconnected.")
 
+
 async def setup(bot: commands.Bot):
-    """
-    Standard async cog setup function for loading the MusicCog.
-    """
     await bot.add_cog(MusicCog(bot))
