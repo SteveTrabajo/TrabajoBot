@@ -53,14 +53,24 @@ class MusicCog(commands.Cog):
             last_pos: int | None = getattr(player, "_wd_position", None)
             player._wd_position = current_pos
 
-            # Only flag stuck if we've been playing long enough to have a baseline
-            # and the position genuinely hasn't moved.
-            if last_pos is not None and current_pos <= last_pos and last_pos > 3000:
+            # Ghost-track detection: Wavelink calculates position locally as
+            # (last_lavalink_position + time_elapsed), so it always advances even
+            # when Lavalink is silently hung (e.g. YouTube source blocked).
+            # If we're past the track's actual length, Lavalink will never fire
+            # TrackEnd — force-skip to unstick the player.
+            track_length = player.current.length if player.current else 0
+            if track_length and current_pos > track_length + 5000:
                 logger.warning(
-                    "Watchdog: audio stuck at %sms in guild %s — reconnecting.",
-                    current_pos, guild.id,
+                    "Watchdog: ghost track in guild %s (pos=%sms > length=%sms) — force-skipping.",
+                    guild.id, current_pos, track_length,
                 )
-                await self._reconnect_player(player)
+                home = getattr(player, "home", None)
+                await player.skip(force=True)
+                if home:
+                    await home.send(
+                        "Track got stuck (source blocked or timed out) and was skipped automatically.",
+                        delete_after=15,
+                    )
 
     @_audio_watchdog.before_loop
     async def _watchdog_before(self):
@@ -231,9 +241,17 @@ class MusicCog(commands.Cog):
     # ---------------------------------------------------------
     # /play
     # ---------------------------------------------------------
-    @app_commands.command(name="play", description="Play a song. Accepts YouTube/Spotify/SoundCloud URLs or a search query.")
-    @app_commands.describe(query="Song name, search query, or URL")
-    async def play(self, interaction: Interaction, query: str):
+    @app_commands.command(name="play", description="Play a song. Accepts URLs or a search query.")
+    @app_commands.describe(
+        query="Song name, search query, or URL (Spotify/YouTube/SoundCloud)",
+        source="Search source for text queries — ignored if query is a URL (default: SoundCloud)",
+    )
+    @app_commands.choices(source=[
+        app_commands.Choice(name="SoundCloud", value="scsearch"),
+        app_commands.Choice(name="YouTube",    value="ytsearch"),
+        app_commands.Choice(name="Spotify",    value="spsearch"),
+    ])
+    async def play(self, interaction: Interaction, query: str, source: str = "scsearch"):
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.response.send_message("You need to join a voice channel first.", ephemeral=True)
             return
@@ -250,6 +268,10 @@ class MusicCog(commands.Cog):
                 f"Music commands must be used in {home.mention}.", ephemeral=True
             )
             return
+
+        # Apply the source prefix for plain-text searches; leave URLs untouched.
+        if not query.startswith(("http://", "https://")):
+            query = f"{source}:{query}"
 
         tracks: wavelink.Search = await wavelink.Playable.search(query)
         if not tracks:
