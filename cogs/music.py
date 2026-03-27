@@ -31,6 +31,26 @@ class MusicCog(commands.Cog):
         logger.info("Wavelink Node connected: %r | Resumed: %s", payload.node, payload.resumed)
 
     @commands.Cog.listener()
+    async def on_wavelink_track_exception(self, payload: wavelink.TrackExceptionEventPayload):
+        player: wavelink.Player | None = payload.player
+        logger.error("Track exception on %r: %s", payload.track, payload.exception)
+        home = getattr(player, "home", None)
+        if home:
+            await home.send(
+                f"Failed to play **{payload.track.title}**: `{payload.exception}`",
+                delete_after=15,
+            )
+
+    @commands.Cog.listener()
+    async def on_wavelink_inactive_player(self, player: wavelink.Player):
+        """Fired by Wavelink when the player has been idle for the inactivity timeout."""
+        logger.info("Player inactive in guild %s, disconnecting.", player.guild.id)
+        home = getattr(player, "home", None)
+        await player.disconnect()
+        if home:
+            await home.send("Left the voice channel due to inactivity.", delete_after=15)
+
+    @commands.Cog.listener()
     async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
         player: wavelink.Player | None = payload.player
         if not player:
@@ -70,14 +90,18 @@ class MusicCog(commands.Cog):
         player = self._get_player(interaction)
         if not player:
             try:
-                player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
+                player = await interaction.user.voice.channel.connect(
+                    cls=wavelink.Player,
+                    timeout=30.0,
+                    self_deaf=True,
+                )
                 player.home = interaction.channel
                 player.autoplay = wavelink.AutoPlayMode.disabled
             except wavelink.exceptions.ChannelTimeoutException as e:
                 logger.error("Lavalink connection timeout: %s", str(e))
                 await interaction.followup.send(
-                    "Failed to connect to voice channel (Lavalink timeout). Check server status.",
-                    ephemeral=True
+                    "Timed out connecting to the Lavalink server. The public node may be overloaded — try again in a moment.",
+                    ephemeral=True,
                 )
                 return None
             except (discord.ClientException, AttributeError) as e:

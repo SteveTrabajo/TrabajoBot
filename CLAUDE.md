@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 python main.py
 ```
 
-Requires a `.env` file with: `DISCORD_BOT_TOKEN`, `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`, `DB_PORT`, `GIPHY_API_KEY`, `STEVEID`, `LIORID`, `SELFID`, `TEST_GUILD_ID`, `LAVALINK_URI`, `LAVALINK_PASSWORD`.
+Requires a `.env` file with: `DISCORD_BOT_TOKEN`, `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`, `DB_PORT`, `GIPHY_API_KEY`, `STEVEID`, `LIORID`, `SELFID`, `TEST_GUILD_ID`. `LAVALINK_URI` and `LAVALINK_PASSWORD` are optional — a pool of public nodes is used by default.
 
 ## Architecture
 

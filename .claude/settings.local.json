@@ -4,7 +4,10 @@
       "WebSearch",
       "WebFetch(domain:wavelink.readthedocs.io)",
       "WebFetch(domain:lavalink.darrennathanael.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:lavainfo.netlify.app)",
+      "WebFetch(domain:freelavalink.serenetia.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

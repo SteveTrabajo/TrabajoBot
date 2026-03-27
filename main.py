@@ -39,15 +39,38 @@ class MyBot(commands.Bot):
                 except Exception as e:
                     logger.error(f"Failed to load cog {cog_name}: {e}")
 
-        # Connect to Lavalink node for music
-        lavalink_uri = os.getenv("LAVALINK_URI")
-        lavalink_password = os.getenv("LAVALINK_PASSWORD")
-        if lavalink_uri and lavalink_password:
-            node = wavelink.Node(uri=lavalink_uri, password=lavalink_password)
-            await wavelink.Pool.connect(nodes=[node], client=self, cache_capacity=100)
-            logger.info("Connected to Lavalink node.")
-        else:
-            logger.warning("LAVALINK_URI or LAVALINK_PASSWORD not set. Music features will be unavailable.")
+        # Connect to Lavalink node pool for music.
+        # Wavelink automatically load-balances and fails over between nodes.
+        # All nodes below are public, non-SSL (HTTP), and support Spotify via LavaSrc.
+        # Source: https://lavalink.darrennathanael.com
+        _PUBLIC_NODES = [
+            # Serenetia — multi-source (YouTube, Spotify, SoundCloud)
+            wavelink.Node(identifier="serenetia", uri="http://lavalinkv4.serenetia.com:80",   password="https://seretia.link/discord"),
+            # NyxBot SG1 — YouTube, Spotify, Apple Music, Deezer, Twitch
+            wavelink.Node(identifier="nyxbot-sg1", uri="http://sg1-nodelink.nyxbot.app:3000", password="nyxbot.app/support"),
+            # NyxBot SG2 — same as SG1, second Singapore region node
+            wavelink.Node(identifier="nyxbot-sg2", uri="http://sg2-nodelink.nyxbot.app:3000", password="nyxbot.app/support"),
+            # G3V — LavaSrc plugin (Spotify) + youtube-plugin
+            wavelink.Node(identifier="g3v",        uri="http://lava.g3v.co.uk:9008",          password="lavalinklol"),
+            # Jirayu — v4 with salee-plugin
+            wavelink.Node(identifier="jirayu",     uri="http://lavalink.jirayu.net:13592",    password="youshallnotpass"),
+            # Nexcloud — v4.2.1
+            wavelink.Node(identifier="nexcloud",   uri="http://n3.nexcloud.in:2026",           password="nexcloud"),
+        ]
+
+        # Optional: add a custom private node from .env (takes priority if set)
+        _custom_uri = os.getenv("LAVALINK_URI")
+        _custom_pass = os.getenv("LAVALINK_PASSWORD")
+        if _custom_uri and _custom_pass:
+            if not _custom_uri.startswith(("http://", "https://")):
+                _custom_uri = f"http://{_custom_uri}"
+            _PUBLIC_NODES.insert(0, wavelink.Node(identifier="custom", uri=_custom_uri, password=_custom_pass))
+
+        try:
+            await wavelink.Pool.connect(nodes=_PUBLIC_NODES, client=self, cache_capacity=100)
+            logger.info("Connected to %d Lavalink node(s).", len(_PUBLIC_NODES))
+        except Exception as e:
+            logger.error("Failed to connect to any Lavalink node: %s", e)
 
         # Sync commands with Discord
         synced = await self.tree.sync()
