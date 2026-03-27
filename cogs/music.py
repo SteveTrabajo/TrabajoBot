@@ -5,6 +5,7 @@ Music commands using Wavelink 3.x + Lavalink 4.x.
 Supports YouTube, Spotify (via LavaSrc plugin), SoundCloud, playlists, and free text search.
 """
 
+import asyncio
 import logging
 from typing import cast
 import discord
@@ -49,6 +50,72 @@ class MusicCog(commands.Cog):
         await player.disconnect()
         if home:
             await home.send("Left the voice channel due to inactivity.", delete_after=15)
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_stuck(self, payload: wavelink.TrackStuckEventPayload):
+        """
+        Fired when Lavalink can't buffer audio frames fast enough (common on public nodes).
+        Skip the stuck track so playback can continue.
+        """
+        player: wavelink.Player | None = payload.player
+        logger.warning("Track stuck: %r (threshold=%sms) — skipping.", payload.track, payload.threshold)
+        home = getattr(player, "home", None)
+        if home:
+            await home.send(
+                f"Track **{payload.track.title}** got stuck, skipping...",
+                delete_after=10,
+            )
+        if player:
+            await player.skip(force=True)
+
+    @commands.Cog.listener()
+    async def on_wavelink_websocket_closed(self, payload: wavelink.WebsocketClosedEventPayload):
+        """
+        Fired when Lavalink's UDP/WebSocket connection to Discord voice closes.
+        This is the root cause of 'audio stops but track keeps running'.
+        We attempt to reconnect the player to restore the audio stream.
+        """
+        player: wavelink.Player | None = payload.player
+        if not player:
+            return
+
+        # Code 4014 = bot was forcefully disconnected by a moderator — don't reconnect.
+        if payload.code == 4014:
+            logger.info("Voice WS closed with 4014 (kicked) in guild %s — not reconnecting.", player.guild.id)
+            return
+
+        logger.warning(
+            "Voice WebSocket closed in guild %s (code=%s, reason=%r). Reconnecting...",
+            player.guild.id, payload.code, payload.reason,
+        )
+
+        channel = player.channel
+        current = player.current
+        position = player.position
+        home = getattr(player, "home", None)
+
+        if not channel:
+            return
+
+        try:
+            await player.disconnect()
+            await asyncio.sleep(2)
+            new_player: wavelink.Player = await channel.connect(
+                cls=wavelink.Player, timeout=30.0, self_deaf=True
+            )
+            new_player.home = home
+            new_player.autoplay = wavelink.AutoPlayMode.disabled
+            if current:
+                await new_player.play(current, start=position)
+                logger.info("Reconnected and resumed %r at %sms.", current, position)
+        except Exception as e:
+            logger.error("Voice reconnect failed in guild %s: %s", player.guild.id, e)
+            if home:
+                await home.send(
+                    "Lost the voice connection and couldn't reconnect automatically. "
+                    "Please use `/play` to start again.",
+                    delete_after=20,
+                )
 
     @commands.Cog.listener()
     async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
