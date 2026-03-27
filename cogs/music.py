@@ -73,7 +73,15 @@ class MusicCog(commands.Cog):
                 player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
                 player.home = interaction.channel
                 player.autoplay = wavelink.AutoPlayMode.disabled
-            except (discord.ClientException, AttributeError):
+            except wavelink.exceptions.ChannelTimeoutException as e:
+                logger.error("Lavalink connection timeout: %s", str(e))
+                await interaction.followup.send(
+                    "Failed to connect to voice channel (Lavalink timeout). Check server status.",
+                    ephemeral=True
+                )
+                return None
+            except (discord.ClientException, AttributeError) as e:
+                logger.error("Failed to join voice channel: %s", str(e))
                 await interaction.followup.send("I couldn't join that voice channel.", ephemeral=True)
                 return None
         elif not hasattr(player, "home"):
