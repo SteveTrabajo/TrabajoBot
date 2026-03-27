@@ -316,15 +316,33 @@ class MusicCog(commands.Cog):
                 return player
             except wavelink.exceptions.ChannelTimeoutException:
                 logger.warning("Node '%s' timed out for guild %s — trying next.", node.identifier, interaction.guild.id)
-                # Ensure the bot is fully disconnected before retrying.
+                # Disconnect any stale voice client and wait until guild.voice_client
+                # is actually None before retrying. channel.connect() raises ClientException
+                # if a voice client still exists, so we must wait for the Discord round-trip
+                # (guild.change_voice_state → VOICE_STATE_UPDATE response) to complete.
                 vc = interaction.guild.voice_client
                 if vc:
                     try:
                         await vc.disconnect(force=True)
                     except Exception:
                         pass
-                await asyncio.sleep(0.5)
-            except (discord.ClientException, AttributeError) as e:
+                for _ in range(10):
+                    await asyncio.sleep(0.5)
+                    if interaction.guild.voice_client is None:
+                        break
+            except discord.ClientException as e:
+                # Already connected error mid-retry — wait for cleanup and continue.
+                if "already connected" in str(e).lower():
+                    logger.warning("Voice client still present for guild %s, waiting...", interaction.guild.id)
+                    for _ in range(10):
+                        await asyncio.sleep(0.5)
+                        if interaction.guild.voice_client is None:
+                            break
+                else:
+                    logger.error("Failed to join voice channel: %s", e)
+                    await interaction.followup.send("I couldn't join that voice channel.", ephemeral=True)
+                    return None
+            except AttributeError as e:
                 logger.error("Failed to join voice channel: %s", e)
                 await interaction.followup.send("I couldn't join that voice channel.", ephemeral=True)
                 return None
