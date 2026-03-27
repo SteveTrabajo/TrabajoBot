@@ -67,6 +67,16 @@ class MusicCog(commands.Cog):
                                 )
                                 await self._reconnect_player(player)
                                 continue
+                        elif resp.status == 404:
+                            # Node has no record of this player — it was dropped server-side
+                            # without sending a TrackEnd/WebSocketClosed event.
+                            logger.warning(
+                                "Watchdog: Lavalink returned 404 for guild %s"
+                                " — player destroyed server-side, reconnecting.",
+                                guild.id,
+                            )
+                            await self._reconnect_player(player)
+                            continue
                         else:
                             logger.warning(
                                 "Watchdog: REST returned HTTP %s for guild %s",
