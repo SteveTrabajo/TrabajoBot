@@ -7,6 +7,7 @@ Supports YouTube, Spotify (via LavaSrc plugin), SoundCloud, playlists, and free 
 
 import asyncio
 import logging
+import time
 from typing import cast
 import discord
 from discord.ext import commands, tasks
@@ -36,39 +37,86 @@ class MusicCog(commands.Cog):
     @tasks.loop(seconds=10)
     async def _audio_watchdog(self):
         """
-        Every 10 seconds, check that each playing player's position is actually
-        advancing. If it isn't (Lavalink thinks it's playing but UDP audio is dead),
-        reconnect the player automatically.
+        Three checks every 10 seconds:
+
+        1. Disconnected check — player._connected is False when Lavalink's voice
+           connection dropped, but player._current stays set. player.playing requires
+           _connected, so this state is invisible to normal checks and was the root
+           cause of 'nowplaying shows track but no audio'. Reconnect.
+
+        2. Raw-position check — player._last_position is the value last pushed by
+           Lavalink (not the locally-extrapolated one). If it hasn't moved AND
+           _last_update (monotonic_ns) is >15s old, Lavalink went completely silent
+           (node crash, hung source fetch). Reconnect.
+
+        3. Ghost-track check — Wavelink caps player.position at track.length once the
+           local clock says the track finished. If it stays capped across two cycles
+           and Lavalink never fired TrackEnd, the source hung mid-stream. Force-skip.
         """
         for guild in self.bot.guilds:
             vc = guild.voice_client
             if not isinstance(vc, wavelink.Player):
                 continue
             player: wavelink.Player = vc
-            if not player.playing or player.paused:
-                player._wd_position = None
+
+            # No current track — nothing to monitor.
+            if not player.current:
+                player._wd_raw = None
+                player._wd_pos = None
                 continue
 
-            current_pos = player.position
-            last_pos: int | None = getattr(player, "_wd_position", None)
-            player._wd_position = current_pos
-
-            # Ghost-track detection: Wavelink calculates position locally as
-            # (last_lavalink_position + time_elapsed), so it always advances even
-            # when Lavalink is silently hung (e.g. YouTube source blocked).
-            # If we're past the track's actual length, Lavalink will never fire
-            # TrackEnd — force-skip to unstick the player.
-            track_length = player.current.length if player.current else 0
-            if track_length and current_pos > track_length + 5000:
+            # --- check 1: voice disconnected but track still set ---
+            connected: bool = getattr(player, "_connected", True)
+            if not connected:
                 logger.warning(
-                    "Watchdog: ghost track in guild %s (pos=%sms > length=%sms) — force-skipping.",
-                    guild.id, current_pos, track_length,
+                    "Watchdog: player._connected=False in guild %s but track is set — reconnecting.",
+                    guild.id,
+                )
+                await self._reconnect_player(player)
+                continue
+
+            if player.paused:
+                continue
+
+            # --- check 2: Lavalink stopped sending playerUpdate events ---
+            raw_now: int = getattr(player, "_last_position", 0)
+            raw_last: int | None = getattr(player, "_wd_raw", None)
+            player._wd_raw = raw_now
+
+            if raw_last is not None and raw_now == raw_last and raw_now > 3000:
+                last_update_ns = getattr(player, "_last_update", None)
+                if last_update_ns is not None:
+                    elapsed_ms = (time.monotonic_ns() - last_update_ns) // 1_000_000
+                    if elapsed_ms > 15_000:
+                        logger.warning(
+                            "Watchdog: no Lavalink playerUpdate for %sms in guild %s — reconnecting.",
+                            elapsed_ms, guild.id,
+                        )
+                        await self._reconnect_player(player)
+                        continue
+
+            # --- check 3: ghost track (position capped at track length) ---
+            calc_pos: int = player.position
+            calc_last: int | None = getattr(player, "_wd_pos", None)
+            player._wd_pos = calc_pos
+            track_length: int = player.current.length if player.current else 0
+
+            if (
+                track_length
+                and calc_pos >= track_length
+                and calc_last is not None
+                and calc_last >= track_length - 1000
+            ):
+                logger.warning(
+                    "Watchdog: ghost track in guild %s (pos=%sms >= length=%sms)"
+                    " — Lavalink never fired TrackEnd. Force-skipping.",
+                    guild.id, calc_pos, track_length,
                 )
                 home = getattr(player, "home", None)
                 await player.skip(force=True)
                 if home:
                     await home.send(
-                        "Track got stuck (source blocked or timed out) and was skipped automatically.",
+                        "Track got stuck (source timed out) and was skipped automatically.",
                         delete_after=15,
                     )
 

@@ -7,7 +7,9 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:lavainfo.netlify.app)",
       "WebFetch(domain:freelavalink.serenetia.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python -c \"import discord; print\\(discord.__version__\\)\")",
+      "Bash(pip show:*)"
     ]
   }
 }
