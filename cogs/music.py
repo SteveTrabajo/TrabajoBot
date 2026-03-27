@@ -68,15 +68,25 @@ class MusicCog(commands.Cog):
             # --- check 1: ask Lavalink's REST API if it's still connected to Discord voice ---
             # This is the ground truth. player.playing / _connected only reflect the bot-side
             # state; the UDP audio stream can silently die without any event being fired.
+            # We read raw JSON instead of using fetch_player_info() because Wavelink's
+            # PlayerResponsePayload does data["pluginInfo"] with no default, crashing on
+            # public nodes that omit that field.
             try:
-                info = await player.node.fetch_player_info(guild.id)
-                if info is not None and not info.state.connected:
-                    logger.warning(
-                        "Watchdog: Lavalink state.connected=False for guild %s — audio stream dead, reconnecting.",
-                        guild.id,
-                    )
-                    await self._reconnect_player(player)
-                    continue
+                node = player.node
+                if node.session_id:
+                    url = f"{node.uri}/v4/sessions/{node.session_id}/players/{guild.id}"
+                    headers = {"Authorization": node.password}
+                    async with node._session.get(url, headers=headers) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if not data.get("state", {}).get("connected", True):
+                                logger.warning(
+                                    "Watchdog: Lavalink state.connected=False for guild %s"
+                                    " — audio stream dead, reconnecting.",
+                                    guild.id,
+                                )
+                                await self._reconnect_player(player)
+                                continue
             except Exception as e:
                 logger.debug("Watchdog REST check failed for guild %s: %s", guild.id, e)
 
