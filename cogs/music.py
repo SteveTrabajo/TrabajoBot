@@ -65,7 +65,22 @@ class MusicCog(commands.Cog):
                 player._wd_pos = None
                 continue
 
-            # --- check 1: voice disconnected but track still set ---
+            # --- check 1: ask Lavalink's REST API if it's still connected to Discord voice ---
+            # This is the ground truth. player.playing / _connected only reflect the bot-side
+            # state; the UDP audio stream can silently die without any event being fired.
+            try:
+                info = await player.node.fetch_player_info(guild.id)
+                if info is not None and not info.state.connected:
+                    logger.warning(
+                        "Watchdog: Lavalink state.connected=False for guild %s — audio stream dead, reconnecting.",
+                        guild.id,
+                    )
+                    await self._reconnect_player(player)
+                    continue
+            except Exception as e:
+                logger.debug("Watchdog REST check failed for guild %s: %s", guild.id, e)
+
+            # --- check 2: bot-side voice disconnected but track still set ---
             connected: bool = getattr(player, "_connected", True)
             if not connected:
                 logger.warning(
@@ -78,7 +93,7 @@ class MusicCog(commands.Cog):
             if player.paused:
                 continue
 
-            # --- check 2: Lavalink stopped sending playerUpdate events ---
+            # --- check 4: Lavalink stopped sending playerUpdate events ---
             raw_now: int = getattr(player, "_last_position", 0)
             raw_last: int | None = getattr(player, "_wd_raw", None)
             player._wd_raw = raw_now
@@ -95,7 +110,7 @@ class MusicCog(commands.Cog):
                         await self._reconnect_player(player)
                         continue
 
-            # --- check 3: ghost track (position capped at track length) ---
+            # --- check 5: ghost track (position capped at track length) ---
             calc_pos: int = player.position
             calc_last: int | None = getattr(player, "_wd_pos", None)
             player._wd_pos = calc_pos
