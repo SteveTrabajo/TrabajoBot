@@ -73,7 +73,7 @@ class MusicCog(commands.Cog):
                 player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
                 player.home = interaction.channel
                 player.autoplay = wavelink.AutoPlayMode.disabled
-            except (discord.ClientException, AttributeError):
+            except (discord.ClientException, AttributeError, wavelink.ChannelTimeoutException):
                 await interaction.followup.send("I couldn't join that voice channel.", ephemeral=True)
                 return None
         elif not hasattr(player, "home"):
