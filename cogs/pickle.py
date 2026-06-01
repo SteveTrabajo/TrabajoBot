@@ -376,58 +376,67 @@ class Pickle(commands.Cog):
         """Clean up when cog is unloaded"""
         self.monthly_reset.cancel()
 
-    @tasks.loop(hours=1)  # Check every hour
+    # Fires daily at 00:05 UTC — avoids the hourly-offset misalignment bug
+    @tasks.loop(time=datetime.time(hour=0, minute=5, tzinfo=datetime.timezone.utc))
     async def monthly_reset(self):
-        """Check if it's time for monthly reset and perform reset if needed"""
-        try:
-            now = datetime.datetime.now(datetime.timezone.utc)
-            # If it's the first day of the month and between 00:00 and 01:00 UTC
-            if now.day == 1 and now.hour == 0:
-                logger.info("Performing monthly pickle size reset...")
-                try:
-                    # Use the transaction method for multiple operations
-                    queries = [
-                        ("""
-                            INSERT INTO pickle_history (user_id, size)
-                            SELECT user_id, current_size
-                            FROM pickle_sizes
-                            WHERE NOT EXISTS (
-                                SELECT 1 FROM pickle_history
-                                WHERE pickle_history.user_id = pickle_sizes.user_id
-                                AND DATE_TRUNC('month', recorded_at) = DATE_TRUNC('month', CURRENT_TIMESTAMP)
-                            )
-                        """, ()),
-                        ("TRUNCATE TABLE pickle_sizes", ())
-                    ]
-                    
-                    self.data.db.execute_transaction(queries)
-                    logger.info("Monthly pickle reset completed successfully")
+        """Perform monthly reset on the 1st of each month"""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if now.day != 1:
+            return
+        await self._do_monthly_reset()
 
-                    # Notify in all guilds where the bot is present
-                    for guild in self.bot.guilds:
-                        try:
-                            channel = next((ch for ch in guild.text_channels if ch.name in ['general', '🍁general', 'bot', 'bot-commands', 'announcements', 'special-operations']), None)
-                            if channel:
-                                await channel.send(
-                                    embed=discord.Embed(
-                                        title=f"{PICKLE_EMOJI} Monthly Pickle Reset {PICKLE_EMOJI}",
-                                        description="All pickle sizes have been reset for the new month! Use `/pickle` to get your new size!",
-                                        color=PICKLE_EMBED_COLOR
-                                    )
-                                )
-                        except Exception as e:
-                            logger.error(f"Failed to send reset notification in guild {guild.name}: {e}")
-                        
+    async def _do_monthly_reset(self):
+        """Execute the reset and send notifications. Safe to call on startup catch-up."""
+        logger.info("Performing monthly pickle size reset...")
+        try:
+            queries = [
+                ("""
+                    INSERT INTO pickle_history (user_id, size)
+                    SELECT user_id, current_size
+                    FROM pickle_sizes
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM pickle_history
+                        WHERE pickle_history.user_id = pickle_sizes.user_id
+                        AND DATE_TRUNC('month', recorded_at) = DATE_TRUNC('month', CURRENT_TIMESTAMP)
+                    )
+                """, ()),
+                ("TRUNCATE TABLE pickle_sizes", ())
+            ]
+            self.data.db.execute_transaction(queries)
+            logger.info("Monthly pickle reset completed successfully")
+
+            for guild in self.bot.guilds:
+                try:
+                    channel = next((ch for ch in guild.text_channels if ch.name in ['general', '🍁general', 'bot', 'bot-commands', 'announcements', 'special-operations']), None)
+                    if channel:
+                        await channel.send(
+                            embed=discord.Embed(
+                                title=f"{PICKLE_EMOJI} Monthly Pickle Reset {PICKLE_EMOJI}",
+                                description="All pickle sizes have been reset for the new month! Use `/pickle` to get your new size!",
+                                color=PICKLE_EMBED_COLOR
+                            )
+                        )
                 except Exception as e:
-                    logger.error(f"Failed to perform monthly pickle reset: {e}")
-                    
+                    logger.error(f"Failed to send reset notification in guild {guild.name}: {e}")
+
         except Exception as e:
-            logger.error(f"Error in monthly reset task: {e}")
+            logger.error(f"Failed to perform monthly pickle reset: {e}")
 
     @monthly_reset.before_loop
     async def before_monthly_reset(self):
-        """Wait until the bot is ready before starting the task"""
+        """Wait until ready, then catch up on any reset missed while the bot was down."""
         await self.bot.wait_until_ready()
+        try:
+            row = self.data.db.execute("""
+                SELECT 1 FROM pickle_sizes
+                WHERE DATE_TRUNC('month', last_updated) < DATE_TRUNC('month', CURRENT_TIMESTAMP)
+                LIMIT 1
+            """, fetch='one')
+            if row:
+                logger.info("Detected missed monthly reset — running catch-up reset now.")
+                await self._do_monthly_reset()
+        except Exception as e:
+            logger.error(f"Error during monthly reset catch-up check: {e}")
         
     def _get_size_message(self, user: discord.Member, size: int, is_new: bool, mentioned_by: Optional[discord.Member] = None) -> str:
         """Generate appropriate message based on user and size"""
