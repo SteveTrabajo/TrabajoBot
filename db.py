@@ -79,36 +79,50 @@ class Database:
     def get_connection(self):
         """
         Context manager for getting a connection from the pool.
-        Automatically returns connection to pool and handles cleanup.
+
+        The server (CockroachDB) closes idle connections, so a pooled connection
+        may be dead by the time it's handed out. We probe each one on checkout and
+        discard dead ones, and recycle broken connections on return, so callers
+        never see a stale connection.
         """
         if not self.connection_pool:
             raise Exception("Connection pool not initialized")
-        
-        conn = None
+
+        conn = self._checkout_live_connection()
         try:
-            conn = self.connection_pool.getconn()
-            # Ensure connection is in autocommit mode off (for explicit transaction control)
-            conn.autocommit = False
-            # Reset connection state
-            conn.rollback()
             yield conn
         except Error as e:
             logger.error(f"Database error: {e}")
             raise
         finally:
-            if conn:
+            broken = conn.closed != 0
+            try:
+                if not broken:
+                    conn.rollback()
+            except Exception:
+                broken = True
+            try:
+                self.connection_pool.putconn(conn, close=broken)
+            except Exception as e:
+                logger.error(f"Error returning connection to pool: {e}")
+
+    def _checkout_live_connection(self, attempts: int = 5):
+        """Get a connection from the pool, discarding any the server has already closed."""
+        last_error = None
+        for _ in range(attempts):
+            conn = self.connection_pool.getconn()
+            try:
+                conn.autocommit = False
+                conn.rollback()  # resets session state and fails fast if the connection is dead
+                return conn
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Discarding stale database connection: {e}")
                 try:
-                    # Clean up any pending transaction
-                    if not conn.closed:
-                        conn.rollback()
-                        self.connection_pool.putconn(conn)
-                except Exception as e:
-                    logger.error(f"Error returning connection to pool: {e}")
-                    # Connection is broken, close it
-                    try:
-                        conn.close()
-                    except:
-                        pass
+                    self.connection_pool.putconn(conn, close=True)
+                except Exception:
+                    pass
+        raise Exception(f"Could not obtain a live database connection: {last_error}")
 
     def execute(self, query: str, params: tuple = None, commit: bool = False, fetch: str = None) -> Optional[Any]:
         """
