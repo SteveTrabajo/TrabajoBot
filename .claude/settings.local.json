@@ -9,7 +9,11 @@
       "WebFetch(domain:freelavalink.serenetia.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(python -c \"import discord; print\\(discord.__version__\\)\")",
-      "Bash(pip show:*)"
+      "Bash(pip show:*)",
+      "Bash(grep -o '^DISCORD_BOT_TOKEN=.*' .env)",
+      "Bash(echo 'DISCORD_APP_ID=1000039115183640588')",
+      "Bash(node -e ' *)",
+      "Read(//c/Users/natan/.claude/**)"
     ]
   }
 }
