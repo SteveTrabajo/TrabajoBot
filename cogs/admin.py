@@ -20,7 +20,7 @@ class AdminCog(commands.Cog):
     """
     cog_name = "Admin"
     cog_description = "Commands for bot maintenance (Owner Only)."
-    cog_icon_url = ""
+    cog_icon_url = "https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72/2699.png"  # ⚙️
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -35,8 +35,7 @@ class AdminCog(commands.Cog):
         current_lower = current.lower()
         
         for guild in self.bot.guilds:
-            guild_name = guild.name.lower()
-            if current_lower in guild_name or current_lower == "":
+            if current_lower in guild.name.lower():
                 guilds.append(
                     app_commands.Choice(name=f"{guild.name} ({guild.member_count} members)", value=str(guild.id))
                 )
@@ -66,8 +65,7 @@ class AdminCog(commands.Cog):
             for channel in guild.text_channels:
                 # Check if user has permission to view the channel
                 if isinstance(channel, discord.TextChannel):
-                    channel_name = channel.name.lower()
-                    if current_lower in channel_name or current_lower == "":
+                    if current_lower in channel.name.lower():
                         channels.append(
                             app_commands.Choice(name=f"#{channel.name}", value=str(channel.id))
                         )

@@ -6,20 +6,25 @@ Includes commands for checking pickle sizes, leaderboard, and growth tracking gr
 """
 
 import asyncio
-import functools
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-import matplotlib.pyplot as plt
-import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # headless backend; GUI backends crash off the main thread
+import matplotlib.style
+from matplotlib.figure import Figure
+import random
 import datetime
 import io
 import os
 from typing import Optional, Tuple, List, Dict
 import logging
+from db import get_database
 from util.db_utils import db_retry
 
 logger = logging.getLogger("TrabajoBot")
+
+matplotlib.style.use('dark_background')
 
 PICKLE_MIN_SIZE = 3
 PICKLE_MAX_SIZE = 32
@@ -32,9 +37,13 @@ PICKLE_LIOR_ID = int(os.getenv('LIORID', 0))
 PICKLE_SELF_ID = int(os.getenv('SELFID', 0))
 
 class PickleData:
-    """Handles all database operations for the Pickle module"""
+    """Handles all database operations for the Pickle module.
+
+    psycopg2 is synchronous, so every query goes through asyncio.to_thread
+    to keep the event loop (heartbeat, other commands) from stalling on
+    CockroachDB round-trips.
+    """
     def __init__(self):
-        from db import get_database
         self.db = get_database()
         self._ensure_tables()
 
@@ -70,7 +79,7 @@ class PickleData:
     @db_retry()
     async def get_size(self, user_id: int) -> Optional[int]:
         """Get current pickle size for a user"""
-        result = self.db.execute("SELECT current_size FROM pickle_sizes WHERE user_id = %s", (user_id,), fetch='one')
+        result = await asyncio.to_thread(self.db.execute, "SELECT current_size FROM pickle_sizes WHERE user_id = %s", (user_id,), fetch='one')
         return result['current_size'] if result else None
 
     @db_retry()
@@ -88,19 +97,19 @@ class PickleData:
                 VALUES (%s, %s)
             """, (user_id, size))
         ]
-        
-        self.db.execute_transaction(queries)
+
+        await asyncio.to_thread(self.db.execute_transaction, queries)
 
     @db_retry()
     async def get_last_rollover(self) -> Optional[str]:
         """Return the YYYY-MM of the last monthly rollover, or None if never run"""
-        row = self.db.execute("SELECT value FROM pickle_meta WHERE key = %s", ('last_rollover',), fetch='one')
+        row = await asyncio.to_thread(self.db.execute, "SELECT value FROM pickle_meta WHERE key = %s", ('last_rollover',), fetch='one')
         return row['value'] if row else None
 
     @db_retry()
     async def get_leaderboard(self) -> List[Dict]:
         """Get the current pickle size leaderboard"""
-        return self.db.execute("""
+        return await asyncio.to_thread(self.db.execute, """
             SELECT user_id, current_size
             FROM pickle_sizes
             ORDER BY current_size DESC
@@ -109,7 +118,7 @@ class PickleData:
     @db_retry()
     async def get_history(self, user_id: int, months: int = 12) -> List[Tuple[datetime.date, int]]:
         """Get pickle size history for a user"""
-        rows = self.db.execute("""
+        rows = await asyncio.to_thread(self.db.execute, """
             SELECT recorded_at::date as date, size
             FROM pickle_history
             WHERE user_id = %s
@@ -123,38 +132,37 @@ class PickleGraphs:
     """Handles all graph generation for the Pickle module"""
     @staticmethod
     def create_history_graph(history: List[Tuple[datetime.date, int]], user: discord.Member) -> Tuple[io.BytesIO, dict]:
-        """Creates a graph of pickle size history"""
+        """Creates a graph of pickle size history.
+
+        Uses the Figure API instead of pyplot: no shared global figure, so
+        this is safe to run in a worker thread and can't leak open figures.
+        """
         dates = [h[0] for h in history]
         sizes = [h[1] for h in history]
-
-        plt.style.use('dark_background')
-        plt.figure(figsize=(10, 6))
-        plt.clf()
-
-        # Create bars
-        bars = plt.bar([d.strftime('%b') for d in dates], sizes)
-
-        # Color all bars white except max
         max_idx = sizes.index(max(sizes))
+
+        fig = Figure(figsize=(10, 6))
+        ax = fig.subplots()
+
+        # Create bars, highlighting the best month
+        bars = ax.bar([d.strftime('%b') for d in dates], sizes)
         for i, bar in enumerate(bars):
             bar.set_color(PICKLE_HIGHLIGHT_COLOR if i == max_idx else PICKLE_GRAPH_COLOR)
 
-        # Customize the graph
-        plt.xlabel("Month")
-        plt.ylabel("Length (cm)")
-        plt.title(f"{user.display_name}'s Pickle Length - Last 12 Months")
+        ax.set_xlabel("Month")
+        ax.set_ylabel("Length (cm)")
+        ax.set_title(f"{user.display_name}'s Pickle Length - Last 12 Months")
 
         # Save to BytesIO
         buf = io.BytesIO()
-        plt.savefig(buf, format='png')
+        fig.savefig(buf, format='png')
         buf.seek(0)
-        plt.close()
 
         # Calculate stats
         stats = {
             'max_month': dates[max_idx].strftime('%b'),
             'max_size': sizes[max_idx],
-            'average': round(np.mean(sizes), 2)
+            'average': round(sum(sizes) / len(sizes), 2)
         }
 
         return buf, stats
@@ -176,17 +184,16 @@ class PickleBoardView(discord.ui.View):
         self.entries_per_page = 10
         # Hide pagination buttons initially
         self.prev_page.disabled = True
-        self.next_page.disabled = True  # Cache for user data
+        self.next_page.disabled = True
 
     async def on_timeout(self):
         """Called when the view times out - removes the buttons"""
         if self.message:
-            await self.message.edit(view=None)
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass  # message was deleted or permissions changed
             
-    async def start(self):
-        """Initialize the view - no longer needed but kept for compatibility"""
-        pass
-
     async def prepare_global_leaderboard(self):
         """Pre-fetch global users and prepare global leaderboard entries"""
         try:
@@ -307,35 +314,17 @@ class PickleBoardView(discord.ui.View):
         await self.update_leaderboard(interaction)
 
     async def bulk_fetch_users(self, user_ids: List[int]) -> Dict[int, discord.User]:
-        """Efficiently fetch multiple users at once"""
-        users = {}
-        # First, try to get from cache
-        uncached_ids = [uid for uid in user_ids if uid not in self.user_cache]
-
-        # Fetch remaining users in chunks to avoid rate limits
-        if uncached_ids:
-            chunk_size = 50
-            for i in range(0, len(uncached_ids), chunk_size):
-                chunk = uncached_ids[i:i + chunk_size]
-                try:
-                    for uid in chunk:
-                        try:
-                            user = await self.cog.bot.fetch_user(uid)
-                            if user:
-                                users[uid] = user
-                                self.user_cache[uid] = user
-                        except Exception:
-                            continue
-                except Exception as e:
-                    logger.error(f"Error fetching users: {e}")
-                    continue
-        
-        # Add cached users
+        """Resolve users, preferring discord.py's local cache over API fetches"""
         for uid in user_ids:
-            if uid in self.user_cache:
-                users[uid] = self.user_cache[uid]
-
-        return users
+            if uid not in self.user_cache:
+                user = self.cog.bot.get_user(uid)
+                if user is None:
+                    try:
+                        user = await self.cog.bot.fetch_user(uid)
+                    except Exception:
+                        continue
+                self.user_cache[uid] = user
+        return {uid: self.user_cache[uid] for uid in user_ids if uid in self.user_cache}
 
     async def update_leaderboard(self, interaction: discord.Interaction):
         """Update the leaderboard message"""
@@ -379,6 +368,7 @@ class Pickle(commands.Cog):
     """A cog that handles the pickle size game functionality"""
     cog_name = "Pickle"
     cog_description = "Pickle commands"
+    cog_icon_url = "https://cdn3.emoji.gg/emojis/1774-hd-eggplant.png"
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.data = PickleData()
@@ -423,13 +413,16 @@ class Pickle(commands.Cog):
                         AND DATE_TRUNC('month', recorded_at) = DATE_TRUNC('month', CURRENT_TIMESTAMP)
                     )
                 """, ()),
-                ("TRUNCATE TABLE pickle_sizes", ()),
+                # DELETE, not TRUNCATE: in CockroachDB TRUNCATE is a schema change
+                # that commits independently of this transaction, so the wipe could
+                # succeed while the marker below failed -> double reset on restart.
+                ("DELETE FROM pickle_sizes", ()),
                 ("""
                     INSERT INTO pickle_meta (key, value) VALUES ('last_rollover', %s)
                     ON CONFLICT (key) DO UPDATE SET value = %s
                 """, (month_key, month_key)),
             ]
-            self.data.db.execute_transaction(queries)
+            await asyncio.to_thread(self.data.db.execute_transaction, queries)
             logger.info("Monthly pickle rollover completed successfully")
         except Exception as e:
             logger.error(f"Failed to perform monthly pickle rollover: {e}")
@@ -503,7 +496,7 @@ class Pickle(commands.Cog):
             is_new = size is None
             
             if is_new:
-                size = np.random.randint(PICKLE_MIN_SIZE, PICKLE_MAX_SIZE + 1)
+                size = random.randint(PICKLE_MIN_SIZE, PICKLE_MAX_SIZE)
                 await self.data.set_size(target.id, size)
                 
             message = self._get_size_message(target, size, is_new, mentioned_by)
@@ -579,10 +572,7 @@ class Pickle(commands.Cog):
                 return
 
             # Generate graph in a thread to avoid blocking the event loop
-            loop = asyncio.get_running_loop()
-            graph_buf, stats = await loop.run_in_executor(
-                None, functools.partial(PickleGraphs.create_history_graph, history, target)
-            )
+            graph_buf, stats = await asyncio.to_thread(PickleGraphs.create_history_graph, history, target)
             
             # Create embed
             embed = discord.Embed(
@@ -630,7 +620,7 @@ class Pickle(commands.Cog):
     async def reset_pickles(self, interaction: discord.Interaction):
         """Reset all pickle sizes (Admin only)"""
         try:
-            self.data.db.execute("TRUNCATE TABLE pickle_sizes, pickle_history", commit=True)
+            await asyncio.to_thread(self.data.db.execute, "TRUNCATE TABLE pickle_sizes, pickle_history", commit=True)
             await interaction.response.send_message(
                 "All pickle sizes have been reset!", 
                 ephemeral=True

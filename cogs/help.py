@@ -50,15 +50,6 @@ class HelpCog(commands.Cog):
                     app_commands.Choice(name=friendly_name, value=friendly_name)
                 )
 
-        # # 2) Gather all command names
-        # for cmd_obj in self.bot.tree.walk_commands():
-        #     qname_lower = cmd_obj.qualified_name.lower()
-        #     if current_lower in qname_lower:
-        #         # The suggestion label is just the command name (e.g. "play" or "music play")
-        #         suggestions.append(
-        #             app_commands.Choice(name=cmd_obj.qualified_name, value=cmd_obj.qualified_name)
-        #         )
-
         # Return up to 25
         return suggestions[:25]
 
@@ -174,6 +165,9 @@ class HelpCog(commands.Cog):
             description=desc,
             color=discord.Color.green()
         )
+        icon_url = getattr(cog, "cog_icon_url", None)
+        if icon_url:
+            embed.set_thumbnail(url=icon_url)
 
         cmd_list = [
             cmd for cmd in self.bot.tree.walk_commands()

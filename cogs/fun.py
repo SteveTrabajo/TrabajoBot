@@ -22,7 +22,7 @@ class FunCog(commands.Cog):
     """
     cog_name = "Fun"
     cog_description = "Fun and random commands"
-    cog_icon = "🎉"
+    cog_icon_url = "https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72/1f389.png"  # 🎉
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot

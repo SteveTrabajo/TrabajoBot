@@ -17,9 +17,9 @@ Requires a `.env` file with: `DISCORD_BOT_TOKEN`, `DB_HOST`, `DB_USER`, `DB_PASS
 ### Core Files
 
 - `main.py` — Bot entry point; defines `MyBot` class, dynamically loads all cogs from `cogs/`, syncs slash commands globally on startup.
-- `db.py` — Singleton `Database` class managing a `psycopg2` connection pool (2–10 connections). Used as a context manager: `with self.db.get_connection() as conn`. Supports transactions and auto-creates tables.
+- `db.py` — `Database` class managing a `psycopg2` connection pool (2–10 connections); get the shared instance via `get_database()`. Used as a context manager: `with self.db.get_connection() as conn`. Supports transactions and auto-creates tables.
 - `util/db_utils.py` — `@db_retry()` decorator that retries database calls on transient CockroachDB errors.
-- `logger.py` — Timed rotating file handler; writes to `logs/bot_YYYY-MM-DD.log` with 7-day retention. Logger name: `"TrabajoBot"`.
+- `logger.py` — Timed rotating file handler; writes to `logs/bot.log`, rotated daily to `bot.log.YYYY-MM-DD` with 7-day retention. Logger name: `"TrabajoBot"`.
 
 ### Cog Pattern
 
@@ -28,7 +28,7 @@ Every cog follows this structure:
 class MyCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.db = Database()  # if DB needed
+        self.db = get_database()  # if DB needed (from db import get_database)
 
     @app_commands.command(name="...", description="...")
     async def my_command(self, interaction: discord.Interaction, ...):

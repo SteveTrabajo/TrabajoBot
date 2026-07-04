@@ -11,9 +11,8 @@ from psycopg2.extras import RealDictCursor
 from psycopg2 import pool, Error
 from dotenv import load_dotenv
 import logging
-import threading
 from contextlib import contextmanager
-from typing import Optional, Dict, List, Any
+from typing import Optional, List, Any
 
 logger = logging.getLogger("TrabajoBot")
 
@@ -24,25 +23,11 @@ class Database:
     """
     Database connection pool manager for CockroachDB.
     Provides thread-safe connection pooling with automatic cleanup.
+    Use get_database() instead of constructing this directly, so the
+    whole bot shares one pool.
     """
-    
-    _instance: Optional['Database'] = None
-    _lock = threading.Lock()
-    
-    def __new__(cls):
-        """Ensure singleton pattern for Database"""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
-    
+
     def __init__(self):
-        """Initialize connection pool (runs only once)"""
-        if self._initialized:
-            return
-            
         self.host = os.getenv("DB_HOST")
         self.user = os.getenv("DB_USER")
         self.password = os.getenv("DB_PASS")
@@ -68,11 +53,9 @@ class Database:
                 connect_timeout=10
             )
             logger.info(f"Connection pool created: {self.min_connections}-{self.max_connections} connections")
-            self._initialized = True
         except Exception as e:
             logger.error(f"Failed to create connection pool: {e}")
             self.connection_pool = None
-            self._initialized = True
             raise
 
     @contextmanager
@@ -229,6 +212,12 @@ class Database:
         self.close_pool()
 
 
+_db: Optional[Database] = None
+
+
 def get_database() -> Database:
-    """Get the singleton database instance"""
-    return Database()
+    """Get the shared database instance, creating it on first use"""
+    global _db
+    if _db is None:
+        _db = Database()
+    return _db
