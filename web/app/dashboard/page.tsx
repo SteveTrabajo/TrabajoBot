@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { revalidatePath } from "next/cache";
-import { auth, signIn, signOut, discordUserId } from "@/auth";
+import { auth, signIn, signOut, discordUserId, isAdmin } from "@/auth";
 import { query } from "@/lib/db";
 
 export const metadata: Metadata = {
@@ -119,10 +120,11 @@ export default async function DashboardPage() {
     );
   }
 
-  const [size, history, birthday] = await Promise.all([
+  const [size, history, birthday, admin] = await Promise.all([
     getPickleSize(userId),
     getPickleHistory(userId),
     getBirthday(userId),
+    isAdmin(),
   ]);
 
   return (
@@ -131,16 +133,26 @@ export default async function DashboardPage() {
         <h1 className="text-3xl font-bold tracking-tight">
           Hey, {session.user.name} 👋
         </h1>
-        <form
-          action={async () => {
-            "use server";
-            await signOut({ redirectTo: "/" });
-          }}
-        >
-          <button className="rounded-md border border-white/15 px-3 py-1.5 text-sm text-foreground/70 transition hover:bg-white/5">
-            Sign out
-          </button>
-        </form>
+        <div className="flex items-center gap-2">
+          {admin && (
+            <Link
+              href="/admin"
+              className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition hover:opacity-85"
+            >
+              Admin panel
+            </Link>
+          )}
+          <form
+            action={async () => {
+              "use server";
+              await signOut({ redirectTo: "/" });
+            }}
+          >
+            <button className="rounded-md border border-white/15 px-3 py-1.5 text-sm text-foreground/70 transition hover:bg-white/5">
+              Sign out
+            </button>
+          </form>
+        </div>
       </div>
 
       <div className="mt-8 grid gap-4 sm:grid-cols-2">

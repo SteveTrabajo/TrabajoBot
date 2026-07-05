@@ -29,3 +29,9 @@ export async function discordUserId(): Promise<string | null> {
   const session = await auth();
   return (session?.user as { id?: string } | undefined)?.id ?? null;
 }
+
+/** True when the logged-in user is the bot owner. */
+export async function isAdmin(): Promise<boolean> {
+  const id = await discordUserId();
+  return !!id && !!process.env.ADMIN_DISCORD_ID && id === process.env.ADMIN_DISCORD_ID;
+}
