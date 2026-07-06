@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import Link from "next/link";
 import { isAdmin } from "@/auth";
 import { query } from "@/lib/db";
 import SizeField from "./SizeField";
+import OverviewTable from "./OverviewTable";
 
 export const metadata: Metadata = {
   title: "Admin | TrabajoBot",
@@ -310,54 +312,21 @@ export default async function AdminPage({
         </form>
 
         {!viewingUser && (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/10 text-left text-foreground/50">
-                  <th className="py-2 pr-4 font-medium">User</th>
-                  <th className="py-2 pr-4 font-medium">Current size</th>
-                  <th className="py-2 pr-4 font-medium">Last rolled</th>
-                  <th className="py-2 pr-4 font-medium">Records</th>
-                  <th className="py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {overview.map((row) => (
-                  <tr key={row.user_id} className="border-b border-white/5">
-                    <td className="py-2 pr-4">
-                      <UserLabel id={row.user_id} name={names.get(row.user_id) ?? "?"} />
-                    </td>
-                    <td className="py-2 pr-4">
-                      {row.current_size !== null ? (
-                        `${row.current_size} cm`
-                      ) : (
-                        <span className="text-foreground/40">not rolled</span>
-                      )}
-                    </td>
-                    <td className="py-2 pr-4">{row.last_month}</td>
-                    <td className="py-2 pr-4">{row.entries}</td>
-                    <td className="py-2 text-right">
-                      <a href={`/admin?user=${row.user_id}`} className={btn}>
-                        View history
-                      </a>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {overview.length === 0 && (
-              <p className="mt-2 text-sm text-foreground/50">No history recorded yet.</p>
-            )}
-          </div>
+          <OverviewTable
+            rows={overview.map((row) => ({
+              ...row,
+              name: names.get(row.user_id) ?? "?",
+            }))}
+          />
         )}
 
         {viewingUser && (
           <p className="mt-4 text-sm text-foreground/60">
             Viewing{" "}
             <UserLabel id={viewingUser} name={names.get(viewingUser) ?? "?"} />{" "}
-            <a href="/admin" className="text-accent underline">
+            <Link href="/admin" className="text-accent underline">
               back to all users
-            </a>
+            </Link>
           </p>
         )}
 
