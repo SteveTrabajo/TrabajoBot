@@ -5,25 +5,79 @@ main.py
  - Syncs slash commands
 """
 
+import asyncio
 import os
+import time
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 # import wavelink  # disabled — re-enable when Lavalink is back
 
 # Import the logger configuration
 from logger import logger
+from db import get_database
 
 load_dotenv()
 intents = discord.Intents.all()
 
 
+class GuildFilteredTree(app_commands.CommandTree):
+    """Refuses commands disabled per guild via the website's toggle page.
+
+    Only disabled commands are stored (guild_disabled_commands table), so any
+    newly added command is enabled everywhere by default.
+    """
+
+    _CACHE_TTL = 60.0  # seconds; toggles apply within a minute
+
+    def __init__(self, client):
+        super().__init__(client)
+        self._disabled_cache = {}
+
+    async def _disabled_for(self, guild_id: int) -> set:
+        cached = self._disabled_cache.get(guild_id)
+        now = time.monotonic()
+        if cached and now - cached[0] < self._CACHE_TTL:
+            return cached[1]
+        try:
+            rows = await asyncio.to_thread(
+                get_database().execute,
+                "SELECT command FROM guild_disabled_commands WHERE guild_id = %s",
+                (guild_id,), fetch='all')
+            disabled = {r['command'] for r in rows}
+        except Exception as e:
+            logger.error(f"Failed to load disabled commands for guild {guild_id}: {e}")
+            disabled = cached[1] if cached else set()  # fail open
+        self._disabled_cache[guild_id] = (now, disabled)
+        return disabled
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.guild_id is None or interaction.command is None:
+            return True
+        if str(interaction.user.id) == os.getenv("STEVEID"):
+            return True  # the owner can't lock himself out
+        if interaction.command.qualified_name in await self._disabled_for(interaction.guild_id):
+            await interaction.response.send_message(
+                "This command is disabled in this server.", ephemeral=True)
+            return False
+        return True
+
+
 class MyBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="?", intents=intents)
+        super().__init__(command_prefix="?", intents=intents, tree_cls=GuildFilteredTree)
 
     async def setup_hook(self):
         logger.info("Starting bot setup...")
+
+        get_database().ensure_table_exists("guild_disabled_commands", """
+            CREATE TABLE IF NOT EXISTS guild_disabled_commands (
+                guild_id BIGINT,
+                command TEXT,
+                PRIMARY KEY (guild_id, command)
+            )
+        """)
 
         # ------------------------------------------------------
         # Dynamically load all cogs from the cogs directory

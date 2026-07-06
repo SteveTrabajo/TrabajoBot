@@ -49,6 +49,12 @@ export default function RootLayout({
               >
                 Dashboard
               </Link>
+              <Link
+                href="/servers"
+                className="rounded-md px-3 py-1.5 text-sm text-foreground/80 transition hover:bg-white/5 hover:text-foreground"
+              >
+                Servers
+              </Link>
               <a
                 href={INVITE_URL}
                 className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition hover:opacity-85"

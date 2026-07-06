@@ -4,18 +4,23 @@ birthdays.py
 A Cog for storing and retrieving user birthdays in CockroachDB using the connection pool.
 """
 
+import asyncio
+import calendar
 import logging
 import datetime
-from discord.ext import commands
+import discord
+from discord.ext import commands, tasks
 from discord import app_commands, Interaction
 from db import get_database
 
 logger = logging.getLogger("TrabajoBot")
 
+ANNOUNCE_CHANNELS = ['general', '🍁general', 'bot', 'bot-commands', 'announcements', 'special-operations']
+
 class BirthdaysCog(commands.Cog):
     """
     Provides slash commands to set a birthday, view your birthday, and list all
-    birthdays in the server.
+    birthdays in the server. Announces birthdays once a day.
     """
     cog_name = "Birthday"
     cog_description = "Birthday tracking commands."
@@ -33,7 +38,80 @@ class BirthdaysCog(commands.Cog):
         )
         """
         self.db.ensure_table_exists("birthdays", creation_query)
+        # Shared key/value table (created by pickle.py too); holds the
+        # announcement marker so restarts can't double-post.
+        self.db.ensure_table_exists("pickle_meta", """
+            CREATE TABLE IF NOT EXISTS pickle_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        self.birthday_announcer.start()
         logger.debug("BirthdaysCog initialized with database table check.")
+
+    async def cog_unload(self):
+        self.birthday_announcer.cancel()
+
+    # Fires daily at 06:00 UTC and on startup; the marker makes it run at
+    # most once per day, so a missed morning is caught up on the next start.
+    @tasks.loop(time=datetime.time(hour=6, tzinfo=datetime.timezone.utc))
+    async def birthday_announcer(self):
+        await self._announce_birthdays()
+
+    @birthday_announcer.before_loop
+    async def before_birthday_announcer(self):
+        await self.bot.wait_until_ready()
+        await self._announce_birthdays()
+
+    @staticmethod
+    def _birthday_keys(today: datetime.date) -> list:
+        """MM-DD keys to match today; Feb 29 folks celebrate on Feb 28 off-leap-years."""
+        keys = [today.strftime("%m-%d")]
+        if today.month == 2 and today.day == 28 and not calendar.isleap(today.year):
+            keys.append("02-29")
+        return keys
+
+    async def _announce_birthdays(self):
+        today = datetime.datetime.now(datetime.timezone.utc).date()
+        try:
+            row = await asyncio.to_thread(
+                self.db.execute,
+                "SELECT value FROM pickle_meta WHERE key = %s", ('last_birthday_announce',), fetch='one')
+            if row and row['value'] == today.isoformat():
+                return
+            rows = await asyncio.to_thread(
+                self.db.execute,
+                "SELECT user_id FROM birthdays WHERE to_char(birthday_date, 'MM-DD') = ANY(%s)",
+                (self._birthday_keys(today),), fetch='all')
+            # Marker before sending: a missed greeting beats a double ping
+            # if the bot crashes mid-send (same policy as the pickle rollover).
+            await asyncio.to_thread(
+                self.db.execute,
+                """INSERT INTO pickle_meta (key, value) VALUES ('last_birthday_announce', %s)
+                   ON CONFLICT (key) DO UPDATE SET value = %s""",
+                (today.isoformat(), today.isoformat()), commit=True)
+        except Exception as e:
+            logger.error(f"Birthday announcement DB step failed: {e}")
+            return
+
+        if not rows:
+            return
+        user_ids = [int(r['user_id']) for r in rows]
+        for guild in self.bot.guilds:
+            members = [m for uid in user_ids if (m := guild.get_member(uid))]
+            if not members:
+                continue
+            channel = next((ch for ch in guild.text_channels if ch.name in ANNOUNCE_CHANNELS), None)
+            if not channel:
+                continue
+            mentions = " ".join(m.mention for m in members)
+            try:
+                await channel.send(
+                    content=f"🎂 Happy birthday {mentions}! 🎉",
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                )
+            except Exception as e:
+                logger.error(f"Failed to send birthday message in {guild.name}: {e}")
 
     @app_commands.command(name="setbirthday", description="Set your birthday (YYYY-MM-DD).")
     @app_commands.describe(date="The date of your birthday (YYYY-MM-DD)")

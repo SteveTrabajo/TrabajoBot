@@ -48,6 +48,59 @@ const CATEGORY_ORDER = [
   "Other",
 ];
 
+export interface UserGuild {
+  id: string;
+  name: string;
+  icon: string | null;
+  canManage: boolean;
+}
+
+const MANAGE_GUILD = 0x20n;
+// Discord rate-limits /users/@me/guilds hard; cache per token for a minute
+// so rapid toggling in the settings UI doesn't 429.
+const userGuildCache = new Map<string, { at: number; guilds: UserGuild[] }>();
+
+/** The guilds of the logged-in user (via their OAuth token), or null on failure. */
+export async function fetchUserGuilds(accessToken: string): Promise<UserGuild[] | null> {
+  const hit = userGuildCache.get(accessToken);
+  if (hit && Date.now() - hit.at < 60_000) return hit.guilds;
+  try {
+    const res = await fetch("https://discord.com/api/v10/users/@me/guilds", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const guilds: UserGuild[] = (await res.json()).map(
+      (g: { id: string; name: string; icon: string | null; owner: boolean; permissions: string }) => ({
+        id: g.id,
+        name: g.name,
+        icon: g.icon,
+        canManage: g.owner || (BigInt(g.permissions) & MANAGE_GUILD) !== 0n,
+      })
+    );
+    userGuildCache.set(accessToken, { at: Date.now(), guilds });
+    return guilds;
+  } catch {
+    return null;
+  }
+}
+
+/** Ids of the guilds the bot itself is in; cached 5 minutes. */
+export async function fetchBotGuildIds(): Promise<Set<string> | null> {
+  const token = process.env.DISCORD_BOT_TOKEN;
+  if (!token) return null;
+  try {
+    const res = await fetch("https://discord.com/api/v10/users/@me/guilds", {
+      headers: { Authorization: `Bot ${token}` },
+      next: { revalidate: 300 },
+    });
+    if (!res.ok) return null;
+    return new Set((await res.json()).map((g: { id: string }) => g.id));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fetches the bot's registered global slash commands from Discord and groups
  * them by category. Returns null when env vars are missing or the API call
