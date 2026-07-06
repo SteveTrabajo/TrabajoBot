@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { isAdmin } from "@/auth";
 import { query } from "@/lib/db";
+import SizeField from "./SizeField";
 
 export const metadata: Metadata = {
   title: "Admin | TrabajoBot",
@@ -14,10 +15,36 @@ const isSnowflake = (v: unknown): v is string =>
   typeof v === "string" && /^\d{5,25}$/.test(v);
 const isDate = (v: unknown): v is string =>
   typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v));
+const isMonth = (v: unknown): v is string =>
+  typeof v === "string" && /^\d{4}-\d{2}$/.test(v);
 const parseSize = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isInteger(n) && n >= 0 && n <= 999 ? n : null;
 };
+// UTC, matching the bot's month_key convention.
+const currentMonth = () => new Date().toISOString().slice(0, 7);
+
+/**
+ * Recompute a user's current size from their latest history row of the
+ * current month, so history edits and the /pickle state never disagree.
+ */
+async function syncCurrentSize(userId: string) {
+  const rows = await query<{ size: number }>(
+    `SELECT size::int4 AS size FROM pickle_history
+     WHERE user_id = $1 AND to_char(recorded_at, 'YYYY-MM') = $2
+     ORDER BY recorded_at DESC LIMIT 1`,
+    [userId, currentMonth()]
+  );
+  if (rows.length > 0) {
+    await query(
+      `INSERT INTO pickle_sizes (user_id, current_size) VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET current_size = $2, last_updated = CURRENT_TIMESTAMP`,
+      [userId, rows[0].size]
+    );
+  } else {
+    await query("DELETE FROM pickle_sizes WHERE user_id = $1", [userId]);
+  }
+}
 
 /** Resolve a user id to a Discord username; cached for a day. */
 async function username(id: string): Promise<string> {
@@ -46,6 +73,18 @@ async function upsertSize(formData: FormData) {
      ON CONFLICT (user_id) DO UPDATE SET current_size = $2, last_updated = CURRENT_TIMESTAMP`,
     [userId, size]
   );
+  // Keep this month's history row in step so the graph agrees.
+  const updated = await query(
+    `UPDATE pickle_history SET size = $2
+     WHERE user_id = $1 AND to_char(recorded_at, 'YYYY-MM') = $3 RETURNING 1`,
+    [userId, size, currentMonth()]
+  );
+  if (updated.length === 0) {
+    await query("INSERT INTO pickle_history (user_id, size) VALUES ($1, $2)", [
+      userId,
+      size,
+    ]);
+  }
   revalidatePath("/admin");
 }
 
@@ -55,6 +94,11 @@ async function deleteSize(formData: FormData) {
   const userId = formData.get("user_id");
   if (!isSnowflake(userId)) return;
   await query("DELETE FROM pickle_sizes WHERE user_id = $1", [userId]);
+  // Deleting "this month's size" also means removing its history record.
+  await query(
+    "DELETE FROM pickle_history WHERE user_id = $1 AND to_char(recorded_at, 'YYYY-MM') = $2",
+    [userId, currentMonth()]
+  );
   revalidatePath("/admin");
 }
 
@@ -69,6 +113,7 @@ async function updateHistory(formData: FormData) {
     "UPDATE pickle_history SET size = $3 WHERE user_id = $1 AND recorded_at = $2::timestamp",
     [userId, recordedAt, size]
   );
+  if (recordedAt.slice(0, 7) === currentMonth()) await syncCurrentSize(userId);
   revalidatePath("/admin");
 }
 
@@ -82,6 +127,7 @@ async function deleteHistory(formData: FormData) {
     "DELETE FROM pickle_history WHERE user_id = $1 AND recorded_at = $2::timestamp",
     [userId, recordedAt]
   );
+  if (recordedAt.slice(0, 7) === currentMonth()) await syncCurrentSize(userId);
   revalidatePath("/admin");
 }
 
@@ -89,13 +135,15 @@ async function addHistory(formData: FormData) {
   "use server";
   if (!(await isAdmin())) return;
   const userId = formData.get("user_id");
-  const date = formData.get("date");
+  const month = formData.get("month");
   const size = parseSize(formData.get("size"));
-  if (!isSnowflake(userId) || !isDate(date) || size === null) return;
+  if (!isSnowflake(userId) || !isMonth(month) || size === null) return;
+  // Sizes are monthly; the stored day is just the 1st as a placeholder.
   await query(
     "INSERT INTO pickle_history (user_id, size, recorded_at) VALUES ($1, $2, $3::timestamp)",
-    [userId, size, date]
+    [userId, size, `${month}-01`]
   );
+  if (month === currentMonth()) await syncCurrentSize(userId);
   revalidatePath("/admin");
 }
 
@@ -177,19 +225,48 @@ export default async function AdminPage({
     ),
   ]);
 
-  const history = isSnowflake(historyUser)
-    ? await query<{ recorded_at: string; day: string; size: number }>(
-        `SELECT recorded_at::text AS recorded_at, recorded_at::date::text AS day, size::int4 AS size
+  const viewingUser = isSnowflake(historyUser) ? historyUser : null;
+
+  const history = viewingUser
+    ? await query<{ recorded_at: string; month: string; day: string; size: number }>(
+        `SELECT recorded_at::text AS recorded_at,
+                to_char(recorded_at, 'YYYY-MM') AS month,
+                recorded_at::date::text AS day,
+                size::int4 AS size
          FROM pickle_history WHERE user_id = $1 ORDER BY recorded_at DESC`,
-        [historyUser]
+        [viewingUser]
       )
     : null;
 
+  // Overview shown when no user is selected: everyone who ever rolled.
+  const overview = viewingUser
+    ? []
+    : await query<{
+        user_id: string;
+        current_size: number | null;
+        last_month: string;
+        entries: number;
+      }>(
+        `SELECT h.user_id::text AS user_id,
+                s.current_size::int4 AS current_size,
+                to_char(max(h.recorded_at), 'YYYY-MM') AS last_month,
+                count(*)::int4 AS entries
+         FROM pickle_history h
+         LEFT JOIN pickle_sizes s ON s.user_id = h.user_id
+         GROUP BY h.user_id, s.current_size
+         ORDER BY max(h.recorded_at) DESC`
+      );
+
   const names = new Map<string, string>();
   await Promise.all(
-    [...new Set([...sizes, ...birthdays].map((r) => r.user_id))].map(
-      async (id) => names.set(id, await username(id))
-    )
+    [
+      ...new Set([
+        ...sizes.map((r) => r.user_id),
+        ...birthdays.map((r) => r.user_id),
+        ...overview.map((r) => r.user_id),
+        ...(viewingUser ? [viewingUser] : []),
+      ]),
+    ].map(async (id) => names.set(id, await username(id)))
   );
 
   return (
@@ -208,8 +285,7 @@ export default async function AdminPage({
               <UserLabel id={row.user_id} name={names.get(row.user_id) ?? "?"} />
               <form action={upsertSize} className="ml-auto flex items-center gap-2">
                 <input type="hidden" name="user_id" value={row.user_id} />
-                <input type="number" name="size" defaultValue={row.current_size} min={0} max={999} className={`${input} w-20`} />
-                <button className={btn}>Save</button>
+                <SizeField defaultValue={row.current_size} />
               </form>
               <form action={deleteSize}>
                 <input type="hidden" name="user_id" value={row.user_id} />
@@ -229,9 +305,61 @@ export default async function AdminPage({
       <section className={card}>
         <h2 className="mb-4 text-lg font-semibold">📈 Pickle history</h2>
         <form method="GET" className="flex flex-wrap items-center gap-2">
-          <input name="user" placeholder="User ID" defaultValue={historyUser ?? ""} required className={`${input} w-48`} />
+          <input name="user" placeholder="User ID (empty for all users)" defaultValue={historyUser ?? ""} className={`${input} w-56`} />
           <button className={btn}>Load history</button>
         </form>
+
+        {!viewingUser && (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/10 text-left text-foreground/50">
+                  <th className="py-2 pr-4 font-medium">User</th>
+                  <th className="py-2 pr-4 font-medium">Current size</th>
+                  <th className="py-2 pr-4 font-medium">Last rolled</th>
+                  <th className="py-2 pr-4 font-medium">Records</th>
+                  <th className="py-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {overview.map((row) => (
+                  <tr key={row.user_id} className="border-b border-white/5">
+                    <td className="py-2 pr-4">
+                      <UserLabel id={row.user_id} name={names.get(row.user_id) ?? "?"} />
+                    </td>
+                    <td className="py-2 pr-4">
+                      {row.current_size !== null ? (
+                        `${row.current_size} cm`
+                      ) : (
+                        <span className="text-foreground/40">not rolled</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4">{row.last_month}</td>
+                    <td className="py-2 pr-4">{row.entries}</td>
+                    <td className="py-2 text-right">
+                      <a href={`/admin?user=${row.user_id}`} className={btn}>
+                        View history
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {overview.length === 0 && (
+              <p className="mt-2 text-sm text-foreground/50">No history recorded yet.</p>
+            )}
+          </div>
+        )}
+
+        {viewingUser && (
+          <p className="mt-4 text-sm text-foreground/60">
+            Viewing{" "}
+            <UserLabel id={viewingUser} name={names.get(viewingUser) ?? "?"} />{" "}
+            <a href="/admin" className="text-accent underline">
+              back to all users
+            </a>
+          </p>
+        )}
 
         {history && (
           <>
@@ -239,14 +367,23 @@ export default async function AdminPage({
               {history.length === 0 && (
                 <p className="text-sm text-foreground/50">No history for this user.</p>
               )}
-              {history.map((row) => (
+              {history.map((row, i) => {
+                const dupe =
+                  history.some((o, j) => j !== i && o.month === row.month);
+                return (
                 <div key={row.recorded_at} className="flex flex-wrap items-center gap-2">
-                  <code className="text-sm text-foreground/60">{row.day}</code>
+                  <code className="text-sm text-foreground/60">
+                    {row.month}
+                    {dupe && (
+                      <span className="ml-1 text-xs text-red-400">
+                        (duplicate, {row.day})
+                      </span>
+                    )}
+                  </code>
                   <form action={updateHistory} className="ml-auto flex items-center gap-2">
                     <input type="hidden" name="user_id" value={historyUser} />
                     <input type="hidden" name="recorded_at" value={row.recorded_at} />
-                    <input type="number" name="size" defaultValue={row.size} min={0} max={999} className={`${input} w-20`} />
-                    <button className={btn}>Save</button>
+                    <SizeField defaultValue={row.size} />
                   </form>
                   <form action={deleteHistory}>
                     <input type="hidden" name="user_id" value={historyUser} />
@@ -254,11 +391,12 @@ export default async function AdminPage({
                     <button className={btnDanger}>Delete</button>
                   </form>
                 </div>
-              ))}
+                );
+              })}
             </div>
             <form action={addHistory} className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4">
               <input type="hidden" name="user_id" value={historyUser} />
-              <input type="date" name="date" required className={input} />
+              <input type="month" name="month" required className={input} />
               <input type="number" name="size" placeholder="cm" min={0} max={999} required className={`${input} w-20`} />
               <button className={btn}>Add record</button>
             </form>

@@ -401,18 +401,10 @@ class Pickle(commands.Cog):
 
         logger.info(f"Running monthly pickle rollover for {month_key}...")
         try:
-            # Archive current sizes, wipe them, and record the rollover atomically.
+            # No archiving here: set_size already writes the history row at roll
+            # time. Archiving at rollover stamped LAST month's size with THIS
+            # month's date, giving users duplicate entries in the new month.
             queries = [
-                ("""
-                    INSERT INTO pickle_history (user_id, size)
-                    SELECT user_id, current_size
-                    FROM pickle_sizes
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM pickle_history
-                        WHERE pickle_history.user_id = pickle_sizes.user_id
-                        AND DATE_TRUNC('month', recorded_at) = DATE_TRUNC('month', CURRENT_TIMESTAMP)
-                    )
-                """, ()),
                 # DELETE, not TRUNCATE: in CockroachDB TRUNCATE is a schema change
                 # that commits independently of this transaction, so the wipe could
                 # succeed while the marker below failed -> double reset on restart.
