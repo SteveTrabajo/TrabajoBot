@@ -85,6 +85,26 @@ export async function fetchUserGuilds(accessToken: string): Promise<UserGuild[] 
   }
 }
 
+/** Text channels of a guild the bot is in; cached 5 minutes. */
+export async function fetchGuildChannels(
+  guildId: string
+): Promise<{ id: string; name: string }[] | null> {
+  const token = process.env.DISCORD_BOT_TOKEN;
+  if (!token) return null;
+  try {
+    const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
+      headers: { Authorization: `Bot ${token}` },
+      next: { revalidate: 300 },
+    });
+    if (!res.ok) return null;
+    return (await res.json())
+      .filter((c: { type: number }) => c.type === 0) // text channels
+      .map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }));
+  } catch {
+    return null;
+  }
+}
+
 /** Ids of the guilds the bot itself is in; cached 5 minutes. */
 export async function fetchBotGuildIds(): Promise<Set<string> | null> {
   const token = process.env.DISCORD_BOT_TOKEN;

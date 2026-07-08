@@ -8,6 +8,7 @@ main.py
 import asyncio
 import os
 import time
+import traceback
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -63,6 +64,25 @@ class GuildFilteredTree(app_commands.CommandTree):
             return False
         return True
 
+    async def on_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        # Cooldowns, permission checks and disabled-command refusals are
+        # expected; only real failures reach the log and the owner's DMs.
+        if isinstance(error, app_commands.CheckFailure):
+            return
+        command = interaction.command.qualified_name if interaction.command else "?"
+        logger.error(f"Unhandled error in /{command}: {error}", exc_info=error)
+
+        owner_id = int(os.getenv("STEVEID", 0))
+        if not owner_id:
+            return
+        try:
+            owner = self.client.get_user(owner_id) or await self.client.fetch_user(owner_id)
+            tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))[-1800:]
+            where = interaction.guild.name if interaction.guild else "DM"
+            await owner.send(f"⚠️ `/{command}` failed in **{where}**:\n```py\n{tb}\n```")
+        except Exception as e:
+            logger.error(f"Failed to DM owner about command error: {e}")
+
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -76,6 +96,12 @@ class MyBot(commands.Bot):
                 guild_id BIGINT,
                 command TEXT,
                 PRIMARY KEY (guild_id, command)
+            )
+        """)
+        get_database().ensure_table_exists("guild_settings", """
+            CREATE TABLE IF NOT EXISTS guild_settings (
+                guild_id BIGINT PRIMARY KEY,
+                announce_channel_id BIGINT
             )
         """)
 

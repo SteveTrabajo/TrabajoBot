@@ -18,6 +18,26 @@ export const metadata: Metadata = {
   title: "TrabajoBot",
   description:
     "A Discord bot with the monthly pickle game, birthdays, moderation and more.",
+  openGraph: {
+    title: "TrabajoBot",
+    description:
+      "A Discord bot with the monthly pickle game, birthdays, moderation and more.",
+    siteName: "TrabajoBot",
+    type: "website",
+    // The bot's own Discord avatar. The hash changes if the avatar is ever
+    // replaced in the Developer Portal; update it here then.
+    images: [
+      {
+        url: "https://cdn.discordapp.com/avatars/1000039115183640588/5c5808146dfcbd5e31d348854ad0072e.png?size=512",
+        width: 512,
+        height: 512,
+      },
+    ],
+  },
+};
+
+export const viewport = {
+  themeColor: "#a06bd4",
 };
 
 export default function RootLayout({

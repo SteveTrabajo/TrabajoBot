@@ -12,10 +12,9 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands, Interaction
 from db import get_database
+from util.announce import get_announce_channel
 
 logger = logging.getLogger("TrabajoBot")
-
-ANNOUNCE_CHANNELS = ['general', '🍁general', 'bot', 'bot-commands', 'announcements', 'special-operations']
 
 class BirthdaysCog(commands.Cog):
     """
@@ -101,7 +100,7 @@ class BirthdaysCog(commands.Cog):
             members = [m for uid in user_ids if (m := guild.get_member(uid))]
             if not members:
                 continue
-            channel = next((ch for ch in guild.text_channels if ch.name in ANNOUNCE_CHANNELS), None)
+            channel = await get_announce_channel(guild)
             if not channel:
                 continue
             mentions = " ".join(m.mention for m in members)

@@ -19,7 +19,7 @@ async function getPickleSize(userId: string): Promise<number | null> {
 
 async function getPickleHistory(userId: string) {
   return query<{ month: string; size: number }>(
-    `SELECT to_char(recorded_at, 'Mon') AS month, size::int4 AS size
+    `SELECT to_char(recorded_at, 'Mon ''YY') AS month, size::int4 AS size
      FROM pickle_history
      WHERE user_id = $1 AND recorded_at > NOW() - INTERVAL '12 months'
      ORDER BY recorded_at ASC`,

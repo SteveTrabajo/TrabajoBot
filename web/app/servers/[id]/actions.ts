@@ -1,7 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { userAccessToken } from "@/auth";
-import { fetchUserGuilds } from "@/lib/discord";
+import { fetchUserGuilds, fetchGuildChannels } from "@/lib/discord";
 import { query } from "@/lib/db";
 
 const isSnowflake = (v: string) => /^\d{5,25}$/.test(v);
@@ -47,4 +47,25 @@ export async function setCommands(
   }
   revalidatePath(`/servers/${guildId}`);
   return { ok: true };
+}
+
+/** Set (or clear, with an empty value) the guild's announcement channel. */
+export async function setAnnounceChannel(guildId: string, formData: FormData) {
+  const channel = formData.get("channel");
+  if (!isSnowflake(guildId) || typeof channel !== "string") return;
+  if (!(await canManage(guildId))) return;
+
+  if (channel === "") {
+    await query("DELETE FROM guild_settings WHERE guild_id = $1", [guildId]);
+  } else {
+    // The channel must actually belong to this guild.
+    const channels = await fetchGuildChannels(guildId);
+    if (!channels?.some((c) => c.id === channel)) return;
+    await query(
+      `INSERT INTO guild_settings (guild_id, announce_channel_id) VALUES ($1, $2)
+       ON CONFLICT (guild_id) DO UPDATE SET announce_channel_id = $2`,
+      [guildId, channel]
+    );
+  }
+  revalidatePath(`/servers/${guildId}`);
 }

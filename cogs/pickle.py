@@ -21,6 +21,7 @@ from typing import Optional, Tuple, List, Dict
 import logging
 from db import get_database
 from util.db_utils import db_retry
+from util.announce import get_announce_channel
 
 logger = logging.getLogger("TrabajoBot")
 
@@ -144,8 +145,9 @@ class PickleGraphs:
         fig = Figure(figsize=(10, 6))
         ax = fig.subplots()
 
-        # Create bars, highlighting the best month
-        bars = ax.bar([d.strftime('%b') for d in dates], sizes)
+        # Create bars, highlighting the best month; year in the label so a
+        # 12-month window spanning two years stays unambiguous
+        bars = ax.bar([d.strftime("%b '%y") for d in dates], sizes)
         for i, bar in enumerate(bars):
             bar.set_color(PICKLE_HIGHLIGHT_COLOR if i == max_idx else PICKLE_GRAPH_COLOR)
 
@@ -160,7 +162,7 @@ class PickleGraphs:
 
         # Calculate stats
         stats = {
-            'max_month': dates[max_idx].strftime('%b'),
+            'max_month': dates[max_idx].strftime("%b '%y"),
             'max_size': sizes[max_idx],
             'average': round(sum(sizes) / len(sizes), 2)
         }
@@ -425,19 +427,39 @@ class Pickle(commands.Cog):
         await self._notify_new_month()
 
     async def _notify_new_month(self):
+        # Last month's sizes, best first, to crown each guild's champion.
+        try:
+            last_month = await asyncio.to_thread(self.data.db.execute, """
+                SELECT user_id, size::int4 AS size FROM pickle_history
+                WHERE to_char(recorded_at, 'YYYY-MM') = to_char(now() - INTERVAL '1 month', 'YYYY-MM')
+                ORDER BY size DESC
+            """, fetch='all')
+        except Exception as e:
+            logger.error(f"Failed to fetch last month's champion: {e}")
+            last_month = []
+
         for guild in self.bot.guilds:
             try:
-                channel = next((ch for ch in guild.text_channels if ch.name in ['general', '🍁general', 'bot', 'bot-commands', 'announcements', 'special-operations']), None)
-                if channel:
-                    await channel.send(
-                        content="@everyone",
-                        allowed_mentions=discord.AllowedMentions(everyone=True),
-                        embed=discord.Embed(
-                            title=f"{PICKLE_EMOJI} Monthly Pickle Reset {PICKLE_EMOJI}",
-                            description="All pickle sizes have been reset for the new month! Use `/pickle` to get your new size!",
-                            color=PICKLE_EMBED_COLOR
-                        )
+                channel = await get_announce_channel(guild)
+                if not channel:
+                    continue
+                embed = discord.Embed(
+                    title=f"{PICKLE_EMOJI} Monthly Pickle Reset {PICKLE_EMOJI}",
+                    description="All pickle sizes have been reset for the new month! Use `/pickle` to get your new size!",
+                    color=PICKLE_EMBED_COLOR
+                )
+                # Champion = best last-month size among this guild's members
+                winner = next(((m, r['size']) for r in last_month if (m := guild.get_member(int(r['user_id'])))), None)
+                if winner:
+                    embed.add_field(
+                        name="👑 Last month's champion",
+                        value=f"{winner[0].mention} with **{winner[1]} cm**!"
                     )
+                await channel.send(
+                    content="@everyone",
+                    allowed_mentions=discord.AllowedMentions(everyone=True),
+                    embed=embed
+                )
             except Exception as e:
                 logger.error(f"Failed to send reset notification in guild {guild.name}: {e}")
 
@@ -606,15 +628,21 @@ class Pickle(commands.Cog):
                 ephemeral=True
             )
 
-    @app_commands.command(name="resetpickles", description="Reset all pickle sizes (Admin only)")
+    @app_commands.command(name="resetpickles", description="Reset this month's pickle sizes (Admin only)")
     @app_commands.guilds(discord.Object(id=int(os.getenv("TEST_GUILD_ID", 0))))
     @app_commands.checks.has_permissions(administrator=True)
     async def reset_pickles(self, interaction: discord.Interaction):
-        """Reset all pickle sizes (Admin only)"""
+        """Reset this month's pickle sizes (Admin only)"""
         try:
-            await asyncio.to_thread(self.data.db.execute, "TRUNCATE TABLE pickle_sizes, pickle_history", commit=True)
+            # Current month only: wiping pickle_history would destroy every
+            # user's yearly graph. Full edits live in the website admin panel.
+            queries = [
+                ("DELETE FROM pickle_sizes", ()),
+                ("DELETE FROM pickle_history WHERE to_char(recorded_at, 'YYYY-MM') = to_char(now(), 'YYYY-MM')", ()),
+            ]
+            await asyncio.to_thread(self.data.db.execute_transaction, queries)
             await interaction.response.send_message(
-                "All pickle sizes have been reset!", 
+                "This month's pickle sizes have been reset!",
                 ephemeral=True
             )
         except Exception as e:
