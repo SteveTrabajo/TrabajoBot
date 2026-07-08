@@ -92,9 +92,9 @@ Next.js 16 App Router + TypeScript + Tailwind v4. **Read `web/AGENTS.md` and the
 |---|---|---|
 | `/` | landing page | public, static |
 | `/commands` | slash commands fetched from Discord API, grouped by category, ISR 1h (zero manual upkeep) | public, static |
-| `/dashboard` | own pickle size, history chart, birthday view/edit | Discord login |
-| `/servers` | guilds where user has Manage Server and bot is present | Discord login |
-| `/servers/[id]` | per-command + per-category toggle switches (optimistic UI) | Manage Server on that guild, re-checked server-side per action |
+| `/dashboard` | own pickle size, history chart, birthday view/edit, manageable-servers list | Discord login |
+| `/servers` | redirect to `/dashboard` (list moved there) | - |
+| `/servers/[id]` | per-command + per-category toggle switches (optimistic UI) + announce-channel picker | Manage Server on that guild, re-checked server-side per action |
 | `/admin` | tables editor: current sizes, per-user monthly history, birthdays, rollover marker | `ADMIN_DISCORD_ID` only; everyone else gets 404 |
 
 Key files: `web/auth.ts` (Auth.js v5 beta, Discord provider, scopes `identify guilds`, JWT sessions, helpers `discordUserId()` / `isAdmin()` / `userAccessToken()`), `web/lib/discord.ts` (command + guild fetching; user-guild list cached per token 60s because Discord rate-limits that endpoint hard), `web/app/admin/page.tsx` (all admin server actions).

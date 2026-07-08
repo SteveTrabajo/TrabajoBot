@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
-import { auth, signIn, signOut, discordUserId, isAdmin } from "@/auth";
+import { auth, signIn, signOut, discordUserId, isAdmin, userAccessToken } from "@/auth";
+import { fetchUserGuilds, fetchBotGuildIds } from "@/lib/discord";
 import { query } from "@/lib/db";
 
 export const metadata: Metadata = {
@@ -120,12 +121,19 @@ export default async function DashboardPage() {
     );
   }
 
-  const [size, history, birthday, admin] = await Promise.all([
+  const token = await userAccessToken();
+  const [size, history, birthday, admin, userGuilds, botGuildIds] = await Promise.all([
     getPickleSize(userId),
     getPickleHistory(userId),
     getBirthday(userId),
     isAdmin(),
+    token ? fetchUserGuilds(token) : null,
+    token ? fetchBotGuildIds() : null,
   ]);
+  const manageable =
+    userGuilds && botGuildIds
+      ? userGuilds.filter((g) => g.canManage && botGuildIds.has(g.id))
+      : null;
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-12">
@@ -199,6 +207,48 @@ export default async function DashboardPage() {
             📈 Pickle history (last 12 months)
           </h2>
           <HistoryChart history={history} />
+        </div>
+
+        {/* Manageable servers */}
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-6 sm:col-span-2">
+          <h2 className="mb-4 text-sm font-medium text-foreground/60">
+            🖥️ Your servers
+          </h2>
+          {manageable === null ? (
+            <p className="text-sm text-foreground/50">
+              Couldn&apos;t load your server list. Sign out and back in to grant
+              access to it.
+            </p>
+          ) : manageable.length === 0 ? (
+            <p className="text-sm text-foreground/50">
+              No manageable servers. You need Manage Server permission in a
+              server that has TrabajoBot.
+            </p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {manageable.map((g) => (
+                <Link
+                  key={g.id}
+                  href={`/servers/${g.id}`}
+                  className="flex items-center gap-3 rounded-lg border border-white/10 p-3 transition hover:border-accent/40"
+                >
+                  {g.icon ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={`https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png?size=64`}
+                      alt=""
+                      className="h-8 w-8 rounded-full"
+                    />
+                  ) : (
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent/30 text-sm font-semibold">
+                      {g.name[0]}
+                    </div>
+                  )}
+                  <span className="truncate text-sm font-medium">{g.name}</span>
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

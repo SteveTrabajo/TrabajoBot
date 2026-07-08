@@ -45,8 +45,8 @@ export default async function ServerSettingsPage({
   return (
     <div className="mx-auto max-w-5xl px-4 py-12">
       <p className="text-sm">
-        <Link href="/servers" className="text-accent underline">
-          ← all servers
+        <Link href="/dashboard" className="text-accent underline">
+          ← back to dashboard
         </Link>
       </p>
       <h1 className="mt-2 text-3xl font-bold tracking-tight">{guild.name}</h1>
