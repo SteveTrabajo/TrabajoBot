@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
+import { Analytics } from "@vercel/analytics/next";
 import { INVITE_URL } from "@/lib/discord";
 import "./globals.css";
 
@@ -84,6 +85,7 @@ export default function RootLayout({
         <footer className="border-t border-white/10 py-6 text-center text-sm text-foreground/50">
           TrabajoBot, made with 🍆 for friends.
         </footer>
+        <Analytics />
       </body>
     </html>
   );
